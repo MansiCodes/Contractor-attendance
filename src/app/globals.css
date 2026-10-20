@@ -1,0 +1,212 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * NF Attendance design system
+ * ---------------------------
+ * Warm paper-white canvas, white surfaces, near-black ink and a single cobalt accent.
+ * Colour is reserved for attendance status (present / absent / pending) and for actions.
+ * Every colour, radius, shadow and the type scale used by components comes from here.
+ */
+@theme inline {
+  --font-sans: var(--font-geist), var(--font-noto-devanagari), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-soft: var(--primary-soft);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-subtle-foreground: var(--subtle-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-present: var(--present);
+  --color-present-soft: var(--present-soft);
+  --color-absent: var(--absent);
+  --color-absent-soft: var(--absent-soft);
+  --color-pending: var(--pending);
+  --color-pending-soft: var(--pending-soft);
+  --color-pending-dot: var(--pending-dot);
+
+  --radius-sm: calc(var(--radius) - 6px);
+  --radius-md: calc(var(--radius) - 3px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+
+  /* Type scale additions (Tailwind's xs–2xl cover the rest). */
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1rem;
+  --text-md: 0.9375rem;
+  --text-md--line-height: 1.375rem;
+  --text-title: 1.375rem;
+  --text-title--line-height: 1.75rem;
+  --text-title--letter-spacing: -0.015em;
+
+  --shadow-surface: 0 0 0 1px rgb(28 25 23 / 0.06), 0 1px 2px rgb(28 25 23 / 0.04);
+  --shadow-raised: 0 0 0 1px rgb(28 25 23 / 0.06), 0 12px 32px -12px rgb(28 25 23 / 0.22);
+  --shadow-bar: 0 -1px 0 rgb(28 25 23 / 0.06), 0 -8px 24px -12px rgb(28 25 23 / 0.16);
+
+  --ease-snappy: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+:root {
+  --radius: 0.75rem;
+
+  /* Neutrals: warm paper canvas, white surfaces, cool near-black ink */
+  --background: oklch(0.976 0.003 84);
+  --foreground: oklch(0.205 0.012 270);
+  --card: oklch(1 0 0);
+  --card-foreground: var(--foreground);
+  --popover: oklch(1 0 0);
+  --popover-foreground: var(--foreground);
+  --muted: oklch(0.955 0.004 84);
+  --muted-foreground: oklch(0.47 0.012 270);
+  --subtle-foreground: oklch(0.6 0.01 270);
+  --secondary: oklch(0.95 0.004 84);
+  --secondary-foreground: var(--foreground);
+  --accent: oklch(0.945 0.005 84);
+  --accent-foreground: var(--foreground);
+  --border: oklch(0.912 0.005 84);
+  --border-strong: oklch(0.86 0.006 84);
+  --input: oklch(0.87 0.006 84);
+
+  /* The one accent: cobalt, used for primary actions, links, selection and focus */
+  --primary: oklch(0.47 0.17 266);
+  --primary-foreground: oklch(0.99 0 0);
+  --primary-soft: oklch(0.955 0.025 266);
+  --ring: oklch(0.55 0.17 266);
+  --destructive: oklch(0.55 0.19 27);
+
+  /* Attendance status */
+  --present: oklch(0.52 0.13 154);
+  --present-soft: oklch(0.962 0.035 154);
+  --absent: oklch(0.54 0.19 27);
+  --absent-soft: oklch(0.965 0.022 27);
+  --pending: oklch(0.52 0.11 65);
+  --pending-soft: oklch(0.965 0.04 85);
+  --pending-dot: oklch(0.76 0.15 75);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: var(--font-sans);
+    font-feature-settings: "cv11", "ss01";
+  }
+  button,
+  [role="button"],
+  a,
+  select,
+  label {
+    touch-action: manipulation;
+  }
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+  ::selection {
+    background: var(--primary-soft);
+  }
+  input[type="date"]::-webkit-calendar-picker-indicator,
+  input[type="time"]::-webkit-calendar-picker-indicator {
+    opacity: 0.55;
+    cursor: pointer;
+  }
+}
+
+@layer components {
+  /* Native select with a quiet up/down chevron; keeps the platform picker on phones. */
+  .select-native {
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236b6b75' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m7 15 5 5 5-5M7 9l5-5 5 5'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.75rem center;
+    background-size: 1rem;
+    padding-right: 2.25rem;
+  }
+}
+
+@layer utilities {
+  .tabular {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum", "cv11";
+  }
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* Gentle entrance used for rows, toasts and bars. */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes pop {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(0.92);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+.animate-rise-in {
+  animation: rise-in 220ms var(--ease-snappy) both;
+}
+.animate-pop {
+  animation: pop 200ms var(--ease-snappy);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -1,0 +1,96 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { AppError } from "@/lib/errors";
+import { getAppMode } from "@/lib/config";
+import { mapDbError } from "@/lib/server/store/supabase-store";
+import * as map from "@/lib/server/store/supabase-mappers";
+
+const LIVE = { NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co", NEXT_PUBLIC_SUPABASE_ANON_KEY: "anon" };
+
+describe("16. demo data cannot leak into production", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+    vi.doUnmock("@/lib/server/store/demo-store");
+    vi.doUnmock("@/lib/supabase/server");
+  });
+
+  it("chooses live mode whenever Supabase is configured", () => {
+    expect(getAppMode(LIVE)).toBe("live");
+    expect(getAppMode({})).toBe("demo");
+    expect(getAppMode({ ...LIVE, APP_MODE: "demo" })).toBe("demo");
+  });
+
+  it("APP_MODE=live without credentials is a hard error, never a silent demo fallback", () => {
+    expect(() => getAppMode({ APP_MODE: "live" })).toThrow(AppError);
+    expect(() => getAppMode({ APP_MODE: "staging" })).toThrow(AppError);
+  });
+
+  it("in live mode the store factory never loads the demo store", async () => {
+    vi.stubEnv("APP_MODE", "live");
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", LIVE.NEXT_PUBLIC_SUPABASE_URL);
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY", LIVE.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+    const demoLoaded = vi.fn();
+    vi.doMock("@/lib/server/store/demo-store", () => {
+      demoLoaded();
+      return { getDemoStore: () => { throw new Error("demo store must not be used"); } };
+    });
+    vi.doMock("@/lib/supabase/server", () => ({ createServerSupabase: async () => ({ fake: true }), createAdminSupabase: () => ({}) }));
+    const { getStore } = await import("@/lib/server/store");
+    const store = await getStore();
+    expect(store.kind).toBe("supabase");
+    expect(demoLoaded).not.toHaveBeenCalled();
+  });
+
+  it("in demo mode the Supabase client is never created", async () => {
+    vi.stubEnv("APP_MODE", "demo");
+    const created = vi.fn();
+    vi.doMock("@/lib/supabase/server", () => {
+      created();
+      return { createServerSupabase: async () => ({}) };
+    });
+    const { getStore } = await import("@/lib/server/store");
+    expect((await getStore()).kind).toBe("demo");
+    expect(created).not.toHaveBeenCalled();
+  });
+
+  it("demo session cookies are signed; forged ones are rejected", async () => {
+    vi.doMock("next/headers", () => ({ cookies: async () => ({ get: () => undefined }) }));
+    const { signDemoSession, verifyDemoSession } = await import("@/lib/server/session");
+    const good = signDemoSession("demo-admin");
+    expect(verifyDemoSession(good)).toBe("demo-admin");
+    expect(verifyDemoSession("demo-admin.forged")).toBeNull();
+    expect(verifyDemoSession(good.replace("demo-admin", "demo-op-jaipur"))).toBeNull();
+    expect(verifyDemoSession(undefined)).toBeNull();
+    vi.doUnmock("next/headers");
+  });
+});
+
+describe("Supabase error and row mapping", () => {
+  it("maps database errors to user-safe app errors", () => {
+    expect(mapDbError({ message: "forbidden: only NF admins can do this" }).code).toBe("forbidden");
+    expect(mapDbError({ message: "conflict: attendance was changed" }).code).toBe("conflict");
+    expect(mapDbError({ message: "invalid: OUT time cannot be in the future" }).message).toBe("OUT time cannot be in the future");
+    expect(mapDbError({ message: 'new row violates row-level security policy for table "workers"', code: "42501" }).code).toBe("forbidden");
+    expect(mapDbError({ message: "duplicate", code: "23505" }).code).toBe("conflict");
+    expect(mapDbError({ message: "boom", code: "XX000" }).message).toContain("Database error");
+  });
+
+  it("maps rows to domain objects with normalised instants and numbers", () => {
+    const rec = map.attendance({
+      id: "a", worker_id: "w", project_id: "p", contractor_id: "c", work_date: "2026-10-20", status: "present",
+      check_in_at: "2026-10-20T03:30:00+00:00", check_out_at: null, method: "bulk", version: 3,
+      created_at: "2026-10-20T03:30:00+00:00", updated_at: "2026-10-20T03:30:00+00:00", created_by: "u", updated_by: "u",
+    });
+    expect(rec.checkInAt).toBe("2026-10-20T03:30:00.000Z");
+    expect(rec.version).toBe(3);
+    const project = map.project({ id: "p", name: "n", location: "l", is_active: true, timezone: "Asia/Kolkata", default_check_in: "09:00:00", allow_overnight: false, operator_backdate_days: 1, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" });
+    expect(project.defaultCheckIn).toBe("09:00");
+    const rule = map.paymentRule({ id: "r", contractor_id: "c", version: 1, effective_from: "2026-01-01", rate_type: "per_day", day_rate: "650.00", hour_rate: null, full_day_hours: "8.00", half_day_hours: null, overtime_enabled: false, overtime_after_hours: null, overtime_hour_rate: null, unpaid_break_minutes: 30, notes: null, created_at: "2026-01-01T00:00:00Z", created_by: null });
+    expect(rule.dayRate).toBe(650);
+    expect(rule.fullDayHours).toBe(8);
+    const log = map.auditLog({ id: 7, attendance_id: "a", worker_id: "w", project_id: "p", contractor_id: "c", work_date: "2026-10-20", action: "update", method: "individual", changed_by: "u", changed_by_role: "operator", changed_at: "2026-10-20T04:00:00+00:00", old_values: { status: "present", check_in_at: "2026-10-20T03:30:00+00:00", check_out_at: null }, new_values: { status: "absent", check_in_at: null, check_out_at: null } });
+    expect(log.id).toBe("7");
+    expect(log.oldValues?.checkInAt).toBe("2026-10-20T03:30:00.000Z");
+    expect(log.newValues.status).toBe("absent");
+  });
+});
