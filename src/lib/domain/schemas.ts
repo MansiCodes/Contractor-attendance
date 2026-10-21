@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { isValidDate, isValidTime } from "./time";
+import { POLICY_EPOCH, POLICY_FIELDS, REQUIRED_POLICY_FIELDS } from "./policy";
+import { isValidDate, isValidTime, isValidTimezone } from "./time";
 
 // Input validation shared by client forms (React Hook Form) and server actions.
 
@@ -30,16 +31,74 @@ export type ContractorInput = z.input<typeof contractorInput>;
 
 export const contractorUpdate = contractorInput.extend({ isActive: z.boolean() });
 
+export const timezoneString = z.string().trim().refine(isValidTimezone, "Choose a valid timezone");
+
+// Attendance rules (suggested IN, overnight, past-day edits) live in attendance policies, not here.
 export const projectInput = z.object({
   name: name("Project name"),
   location: name("Location"),
   isActive: z.boolean().default(true),
-  timezone: z.string().min(1).default("Asia/Kolkata"),
-  defaultCheckIn: timeString.default("09:00"),
-  allowOvernight: z.boolean().default(false),
-  operatorBackdateDays: z.coerce.number().int().min(0).max(7).default(0),
+  timezone: timezoneString,
 });
 export type ProjectInput = z.input<typeof projectInput>;
+
+const optionalTime = z.preprocess((v) => (v === "" || v === undefined ? null : v), timeString.nullable());
+const optionalInt = (min: number, max: number) =>
+  z.preprocess((v) => (v === "" || v === undefined || v === null ? null : v), z.coerce.number().int().min(min).max(max).nullable());
+const optionalHours = z.preprocess(
+  (v) => (v === "" || v === undefined || v === null ? null : v),
+  z.coerce.number().min(0.25, "At least 0.25 hours").max(24, "Must be 24 hours or less").nullable(),
+);
+
+/**
+ * One new policy version. projectId null = company defaults (every required field set).
+ * For a site, `overridden` lists the fields it sets; every other field inherits the company value.
+ */
+export const attendancePolicyInput = z
+  .object({
+    projectId: id.nullable(),
+    effectiveFrom: dateString,
+    overridden: z.array(z.enum(POLICY_FIELDS)).default([]),
+    suggestedCheckIn: optionalTime,
+    shiftStart: optionalTime,
+    shiftEnd: optionalTime,
+    allowOvernight: z.boolean().nullable().default(null),
+    inFutureToleranceMin: optionalInt(0, 240),
+    outFutureToleranceMin: optionalInt(0, 60),
+    lateGraceMin: optionalInt(0, 240),
+    halfDayBelowHours: optionalHours,
+    overtimeAfterHours: optionalHours,
+    overtimeMinMinutes: optionalInt(0, 240),
+    operatorBackdateDays: optionalInt(0, 7),
+    editCutoffTime: optionalTime,
+    autoAbsentEnabled: z.boolean().nullable().default(null),
+    defaultTimezone: z.preprocess((v) => (v === "" || v === undefined ? null : v), timezoneString.nullable()),
+    notes: optionalText(300),
+    allowBackdate: z.boolean().default(false),
+  })
+  .transform((v) => {
+    if (v.projectId === null) return { ...v, overridden: [...POLICY_FIELDS] };
+    // A site row only stores what it overrides.
+    const overridden = POLICY_FIELDS.filter((f) => v.overridden.includes(f));
+    const out = { ...v, overridden, defaultTimezone: null };
+    for (const f of POLICY_FIELDS) if (!overridden.includes(f)) (out as Record<string, unknown>)[f] = null;
+    return out;
+  })
+  .superRefine((v, ctx) => {
+    const company = v.projectId === null;
+    if (v.effectiveFrom < POLICY_EPOCH) ctx.addIssue({ code: "custom", path: ["effectiveFrom"], message: `Choose a date from ${POLICY_EPOCH}` });
+    if (company && !v.defaultTimezone) ctx.addIssue({ code: "custom", path: ["defaultTimezone"], message: "Choose the timezone for new sites" });
+    for (const f of REQUIRED_POLICY_FIELDS) {
+      if ((company || v.overridden.includes(f)) && v[f] === null) ctx.addIssue({ code: "custom", path: [f], message: "Required" });
+    }
+    if (!company && v.overridden.includes("shiftStart") !== v.overridden.includes("shiftEnd"))
+      ctx.addIssue({ code: "custom", path: ["shiftEnd"], message: "Shift start and end are set together" });
+    if ((v.shiftStart === null) !== (v.shiftEnd === null))
+      ctx.addIssue({ code: "custom", path: ["shiftEnd"], message: "Set both shift start and end, or neither" });
+    if (v.halfDayBelowHours !== null && v.overtimeAfterHours !== null && v.halfDayBelowHours >= v.overtimeAfterHours)
+      ctx.addIssue({ code: "custom", path: ["halfDayBelowHours"], message: "Half-day threshold must be below the overtime threshold" });
+  });
+export type AttendancePolicyInput = z.input<typeof attendancePolicyInput>;
 
 export const workerCreate = z.object({
   fullName: name("Worker name"),
@@ -117,6 +176,8 @@ export const attendanceItem = z.object({
   status: z.enum(["pending", "present", "absent"]),
   checkIn: timeString.nullable(),
   checkOut: timeString.nullable(),
+  /** "suggested" only when the operator accepted the site's suggested IN unchanged */
+  checkInSource: z.enum(["entered", "suggested"]).nullable().default(null),
   method: z.enum(["individual", "bulk"]),
   /** version of the record the client edited; null when no record existed */
   expectedVersion: z.number().int().nullable(),
@@ -128,6 +189,8 @@ export const attendanceBatch = z.object({
   contractorId: id,
   workDate: dateString,
   items: z.array(attendanceItem).min(1).max(500),
+  /** the register's policy token; a mismatch means the site's settings changed while editing */
+  policyToken: z.string().max(400).optional(),
 });
 export type AttendanceBatchInput = z.infer<typeof attendanceBatch>;
 

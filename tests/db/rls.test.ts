@@ -21,7 +21,7 @@ const expectError = async (p: Promise<unknown>, match: RegExp) => {
 };
 
 const item = (o: Record<string, unknown>) =>
-  JSON.stringify([{ worker_id: workerA, contractor_id: contractorId, status: "present", check_in_at: null, check_out_at: null, method: "individual", expected_version: null, ...o }]);
+  JSON.stringify([{ worker_id: workerA, contractor_id: contractorId, status: "present", check_in_at: null, check_out_at: null, check_in_source: "entered", method: "individual", expected_version: null, ...o }]);
 
 beforeAll(async () => {
   db = await createDb();
@@ -96,8 +96,8 @@ describe("2. operators only see and edit their own sites", () => {
       await expectError(db.query(`select * from public.save_attendance($1, $2::date, $3::jsonb)`, [projectA, d, item({ status: "absent" })]), /forbidden/);
       await expectError(
         db.query(`insert into public.attendance_records (worker_id, project_id, contractor_id, work_date, status) values ($1, $2, $3, $4, 'absent')`, [workerA, projectA, contractorId, d]),
-        // Rejected either by the integrity trigger (B cannot even see A's assignments) or by RLS.
-        /row-level security|not assigned/,
+        // Refused by the write trigger's authorization check before any lookup (RLS would refuse it too).
+        /forbidden/,
       );
     });
   });

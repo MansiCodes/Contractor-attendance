@@ -47,7 +47,7 @@ describe("2. operators cannot access unauthorised project data", () => {
     await expectCode(
       saveAttendance(ctxFor(store, actors.puneLucknow), {
         projectId: "p1", contractorId: "c2", workDate: TODAY,
-        items: [{ workerId: w.workerId, status: "absent", checkIn: null, checkOut: null, method: "individual", expectedVersion: w.saved?.version ?? null }],
+        items: [{ workerId: w.workerId, status: "absent", checkIn: null, checkOut: null, checkInSource: "entered", method: "individual", expectedVersion: w.saved?.version ?? null }],
       }),
       "forbidden",
     );
@@ -67,7 +67,7 @@ describe("2. operators cannot access unauthorised project data", () => {
     const view = await loadRegister(ctxFor(store, actors.puneLucknow), { projectId: "p2", contractorId: "c2", date: yesterday });
     expect(view.editable).toBe(false);
     const row = view.rows[0];
-    const item = { workerId: row.workerId, status: "absent" as const, checkIn: null, checkOut: null, method: "individual" as const, expectedVersion: row.saved?.version ?? null };
+    const item = { workerId: row.workerId, status: "absent" as const, checkIn: null, checkOut: null, checkInSource: "entered" as const, method: "individual" as const, expectedVersion: row.saved?.version ?? null };
     await expectCode(saveAttendance(ctxFor(store, actors.puneLucknow), { projectId: "p2", contractorId: "c2", workDate: yesterday, items: [item] }), "forbidden");
     const res = await saveAttendance(ctxFor(store, actors.admin), { projectId: "p2", contractorId: "c2", workDate: yesterday, items: [item] });
     expect(res.saved).toBeLessThanOrEqual(1);
@@ -79,7 +79,7 @@ describe("2. operators cannot access unauthorised project data", () => {
     await expectCode(
       saveAttendance(ctxFor(store, actors.admin), {
         projectId: "p2", contractorId: "c2", workDate: addDays(TODAY, 1),
-        items: [{ workerId: row.workerId, status: "absent", checkIn: null, checkOut: null, method: "individual", expectedVersion: null }],
+        items: [{ workerId: row.workerId, status: "absent", checkIn: null, checkOut: null, checkInSource: "entered", method: "individual", expectedVersion: null }],
       }),
       "invalid",
     );
@@ -117,10 +117,10 @@ describe("3–4. admin manages workers; workers appear only on their assigned si
 });
 
 describe("5–8. attendance capture rules", () => {
-  it("loading the register creates no records: everyone starts pending with a suggested 9 AM", async () => {
+  it("loading the register creates no records: everyone starts pending with the site's suggested time", async () => {
     const before = (await store.listAttendance({ from: TODAY, to: TODAY })).length;
     const view = await puneRegister();
-    expect(view.project?.defaultCheckIn).toBe("09:00");
+    expect(view.policy?.day.suggestedCheckIn).toBe("09:00"); // the Pune demo site's setting, not a built-in default
     expect(view.rows.every((r) => r.saved === null)).toBe(true);
     expect((await store.listAttendance({ from: TODAY, to: TODAY })).length).toBe(before);
     const report = await getReport(ctxFor(store, actors.admin), { from: TODAY, to: TODAY, projectId: "p2", contractorId: "c2" });
@@ -135,9 +135,9 @@ describe("5–8. attendance capture rules", () => {
     await saveAttendance(op, {
       projectId: "p2", contractorId: "c2", workDate: TODAY,
       items: [
-        { workerId: a.workerId, status: "present", checkIn: "09:00", checkOut: "12:00", method: "individual", expectedVersion: null },
-        { workerId: b.workerId, status: "present", checkIn: "10:15", checkOut: null, method: "individual", expectedVersion: null },
-        { workerId: c.workerId, status: "absent", checkIn: null, checkOut: null, method: "individual", expectedVersion: null },
+        { workerId: a.workerId, status: "present", checkIn: "09:00", checkOut: "12:00", checkInSource: "entered", method: "individual", expectedVersion: null },
+        { workerId: b.workerId, status: "present", checkIn: "10:15", checkOut: null, checkInSource: "entered", method: "individual", expectedVersion: null },
+        { workerId: c.workerId, status: "absent", checkIn: null, checkOut: null, checkInSource: "entered", method: "individual", expectedVersion: null },
       ],
     });
     const report = await getReport(ctxFor(store, actors.admin), { from: TODAY, to: TODAY, projectId: "p2", contractorId: "c2" });
@@ -158,9 +158,9 @@ describe("5–8. attendance capture rules", () => {
     const op = ctxFor(store, actors.puneLucknow);
     const [a] = (await puneRegister()).rows;
     const base = { projectId: "p2", contractorId: "c2", workDate: TODAY };
-    await expectCode(saveAttendance(op, { ...base, items: [{ workerId: a.workerId, status: "present", checkIn: "09:00", checkOut: "08:00", method: "individual", expectedVersion: null }] }), "invalid");
+    await expectCode(saveAttendance(op, { ...base, items: [{ workerId: a.workerId, status: "present", checkIn: "09:00", checkOut: "08:00", checkInSource: "entered", method: "individual", expectedVersion: null }] }), "invalid");
     // NOW is 12:30 IST — an 18:00 checkout has not happened yet.
-    await expectCode(saveAttendance(op, { ...base, items: [{ workerId: a.workerId, status: "present", checkIn: "09:00", checkOut: "18:00", method: "individual", expectedVersion: null }] }), "invalid");
+    await expectCode(saveAttendance(op, { ...base, items: [{ workerId: a.workerId, status: "present", checkIn: "09:00", checkOut: "18:00", checkInSource: "entered", method: "individual", expectedVersion: null }] }), "invalid");
     expect((await store.listAttendance({ projectIds: ["p2"], from: TODAY, to: TODAY })).length).toBe(0);
   });
 
@@ -171,8 +171,8 @@ describe("5–8. attendance capture rules", () => {
       saveAttendance(op, {
         projectId: "p2", contractorId: "c2", workDate: TODAY,
         items: [
-          { workerId: a.workerId, status: "present", checkIn: "09:00", checkOut: null, method: "individual", expectedVersion: null },
-          { workerId: b.workerId, status: "present", checkIn: "09:00", checkOut: "08:30", method: "individual", expectedVersion: null },
+          { workerId: a.workerId, status: "present", checkIn: "09:00", checkOut: null, checkInSource: "entered", method: "individual", expectedVersion: null },
+          { workerId: b.workerId, status: "present", checkIn: "09:00", checkOut: "08:30", checkInSource: "entered", method: "individual", expectedVersion: null },
         ],
       }),
       "invalid",
@@ -183,7 +183,7 @@ describe("5–8. attendance capture rules", () => {
   it("detects concurrent edits with record versions", async () => {
     const op = ctxFor(store, actors.puneLucknow);
     const [a] = (await puneRegister()).rows;
-    const item = { workerId: a.workerId, status: "present" as const, checkIn: "09:00", checkOut: null, method: "individual" as const, expectedVersion: null };
+    const item = { workerId: a.workerId, status: "present" as const, checkIn: "09:00", checkOut: null, checkInSource: "entered" as const, method: "individual" as const, expectedVersion: null };
     await saveAttendance(op, { projectId: "p2", contractorId: "c2", workDate: TODAY, items: [item] });
     await expectCode(saveAttendance(op, { projectId: "p2", contractorId: "c2", workDate: TODAY, items: [{ ...item, status: "absent", checkIn: null }] }), "conflict");
   });
@@ -197,7 +197,7 @@ describe("5–8. attendance capture rules", () => {
     const w = view.rows[0];
     await saveAttendance(a, {
       projectId: "p5", contractorId: "c4", workDate: yesterday,
-      items: [{ workerId: w.workerId, status: "present", checkIn: "21:00", checkOut: "05:30", method: "individual", expectedVersion: w.saved?.version ?? null }],
+      items: [{ workerId: w.workerId, status: "present", checkIn: "21:00", checkOut: "05:30", checkInSource: "entered", method: "individual", expectedVersion: w.saved?.version ?? null }],
     });
     const rec = (await store.listAttendance({ projectIds: ["p5"], from: yesterday, to: yesterday })).find((r) => r.workerId === w.workerId)!;
     expect(rec.checkOutAt).toBe("2026-10-20T00:00:00.000Z"); // 05:30 IST next day
@@ -286,13 +286,13 @@ describe("15. audit log", () => {
     await saveAttendance(op, {
       projectId: "p2", contractorId: "c2", workDate: TODAY,
       items: [
-        { workerId: a.workerId, status: "present", checkIn: "09:00", checkOut: null, method: "bulk", expectedVersion: null },
-        { workerId: b.workerId, status: "present", checkIn: "09:00", checkOut: null, method: "bulk", expectedVersion: null },
+        { workerId: a.workerId, status: "present", checkIn: "09:00", checkOut: null, checkInSource: "entered", method: "bulk", expectedVersion: null },
+        { workerId: b.workerId, status: "present", checkIn: "09:00", checkOut: null, checkInSource: "entered", method: "bulk", expectedVersion: null },
       ],
     });
     await saveAttendance(op, {
       projectId: "p2", contractorId: "c2", workDate: TODAY,
-      items: [{ workerId: a.workerId, status: "present", checkIn: "09:20", checkOut: null, method: "individual", expectedVersion: 1 }],
+      items: [{ workerId: a.workerId, status: "present", checkIn: "09:20", checkOut: null, checkInSource: "entered", method: "individual", expectedVersion: 1 }],
     });
     const log = await getAuditLog(ctxFor(store, actors.admin), { projectId: "p2", from: TODAY, to: TODAY });
     const forA = log.filter((l) => l.workerId === a.workerId);
@@ -313,7 +313,7 @@ describe("15. audit log", () => {
   it("unchanged entries create no audit noise", async () => {
     const op = ctxFor(store, actors.puneLucknow);
     const [a] = (await puneRegister()).rows;
-    const item = { workerId: a.workerId, status: "absent" as const, checkIn: null, checkOut: null, method: "individual" as const };
+    const item = { workerId: a.workerId, status: "absent" as const, checkIn: null, checkOut: null, checkInSource: "entered" as const, method: "individual" as const };
     await saveAttendance(op, { projectId: "p2", contractorId: "c2", workDate: TODAY, items: [{ ...item, expectedVersion: null }] });
     const res = await saveAttendance(op, { projectId: "p2", contractorId: "c2", workDate: TODAY, items: [{ ...item, expectedVersion: 1 }] });
     expect(res.saved).toBe(0);

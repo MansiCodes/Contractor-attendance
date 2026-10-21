@@ -1,3 +1,4 @@
+import { POLICY_FIELDS, type AttendancePolicyVersion, type PolicyField, type ResolvedPolicy } from "@/lib/domain/policy";
 import type {
   AttendanceRecord,
   AttendanceSnapshot,
@@ -11,7 +12,7 @@ import type {
   Worker,
   WorkerAssignment,
 } from "@/lib/domain/types";
-import type { PaymentRuleFields, ProjectFields } from "./types";
+import type { AttendancePolicyFields, PaymentRuleFields, ProjectFields } from "./types";
 
 // Pure conversions between Postgres rows (snake_case) and domain objects.
 
@@ -21,6 +22,10 @@ export type Row = Record<string, any>;
 const iso = (v: string | null | undefined) => (v ? new Date(v).toISOString() : null);
 const isoReq = (v: string) => new Date(v).toISOString();
 const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
+/** "HH:mm:ss" (Postgres time) → "HH:mm" */
+const hhmm = (v: unknown) => (v === null || v === undefined ? null : String(v).slice(0, 5));
+/** Postgres date as "yyyy-MM-dd" (PostgREST sends a string; PGlite a Date at UTC midnight) */
+const day = (v: unknown) => (v instanceof Date ? v.toISOString().slice(0, 10) : String(v));
 
 export const profile = (r: Row): Profile => ({
   id: r.id,
@@ -48,9 +53,6 @@ export const project = (r: Row): Project => ({
   location: r.location,
   isActive: r.is_active,
   timezone: r.timezone,
-  defaultCheckIn: String(r.default_check_in).slice(0, 5),
-  allowOvernight: r.allow_overnight,
-  operatorBackdateDays: Number(r.operator_backdate_days),
   createdAt: isoReq(r.created_at),
   updatedAt: isoReq(r.updated_at),
 });
@@ -60,9 +62,6 @@ export const projectFields = (p: ProjectFields): Row => ({
   location: p.location,
   is_active: p.isActive,
   timezone: p.timezone,
-  default_check_in: p.defaultCheckIn,
-  allow_overnight: p.allowOvernight,
-  operator_backdate_days: p.operatorBackdateDays,
 });
 
 export const contractorProject = (r: Row): ContractorProjectAssignment => ({
@@ -112,6 +111,7 @@ export const attendance = (r: Row): AttendanceRecord => ({
   status: r.status,
   checkInAt: iso(r.check_in_at),
   checkOutAt: iso(r.check_out_at),
+  checkInSource: r.check_in_source ?? null,
   method: r.method,
   version: Number(r.version),
   createdAt: isoReq(r.created_at),
@@ -154,8 +154,16 @@ export const paymentRuleFields = (f: PaymentRuleFields): Row => ({
   notes: f.notes,
 });
 
+// Entries written before check-in sources were tracked lack that key: it stays undefined.
 const snapshot = (v: Row | null): AttendanceSnapshot | null =>
-  v ? { status: v.status, checkInAt: iso(v.check_in_at), checkOutAt: iso(v.check_out_at) } : null;
+  v
+    ? {
+        status: v.status,
+        checkInAt: iso(v.check_in_at),
+        checkOutAt: iso(v.check_out_at),
+        ...("check_in_source" in v ? { checkInSource: v.check_in_source ?? null } : {}),
+      }
+    : null;
 
 export const auditLog = (r: Row): AuditLog => ({
   id: String(r.id),
@@ -172,3 +180,54 @@ export const auditLog = (r: Row): AuditLog => ({
   oldValues: snapshot(r.old_values),
   newValues: snapshot(r.new_values)!,
 });
+
+// ---------- attendance policies ----------
+
+const snake = (f: PolicyField) => f.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+const TIME_FIELDS = new Set<PolicyField>(["suggestedCheckIn", "shiftStart", "shiftEnd", "editCutoffTime"]);
+const BOOL_FIELDS = new Set<PolicyField>(["allowOvernight", "autoAbsentEnabled"]);
+
+export const policyRow = (r: Row): AttendancePolicyVersion => {
+  const values = {} as Record<PolicyField, unknown>;
+  for (const f of POLICY_FIELDS) {
+    const v = r[snake(f)];
+    values[f] = TIME_FIELDS.has(f) ? hhmm(v) : BOOL_FIELDS.has(f) ? (v ?? null) : num(v);
+  }
+  const isCompany = r.project_id === null || r.project_id === undefined;
+  const overridden = ((r.overridden ?? []) as string[]).map((k) => POLICY_FIELDS.find((f) => snake(f) === k)).filter((f): f is PolicyField => !!f);
+  return {
+    ...(values as Omit<AttendancePolicyVersion, "id">),
+    id: r.id,
+    projectId: isCompany ? null : r.project_id,
+    version: Number(r.version),
+    effectiveFrom: day(r.effective_from),
+    overridden: isCompany ? [...POLICY_FIELDS] : overridden,
+    defaultTimezone: r.default_timezone ?? null,
+    notes: r.notes ?? null,
+    createdAt: isoReq(r.created_at),
+    createdBy: r.created_by ?? null,
+  };
+};
+
+/** Row of public.attendance_policy_for() (the resolved values, no history). */
+export const effectivePolicy = (r: Row): ResolvedPolicy => {
+  const values = {} as Record<PolicyField, unknown>;
+  for (const f of POLICY_FIELDS) {
+    const v = r[snake(f)];
+    values[f] = TIME_FIELDS.has(f) ? hhmm(v) : BOOL_FIELDS.has(f) ? Boolean(v) : num(v);
+  }
+  return { ...(values as unknown as ResolvedPolicy), companyPolicyId: r.company_policy_id ?? null, sitePolicyId: r.site_policy_id ?? null };
+};
+
+export const policyFields = (f: AttendancePolicyFields): Row => {
+  const row: Row = {
+    project_id: f.projectId,
+    effective_from: f.effectiveFrom,
+    // Company rows set every field; only site rows list their overrides.
+    overridden: f.projectId === null ? [] : f.overridden.map(snake),
+    default_timezone: f.defaultTimezone,
+    notes: f.notes,
+  };
+  for (const k of POLICY_FIELDS) row[snake(k)] = f[k];
+  return row;
+};

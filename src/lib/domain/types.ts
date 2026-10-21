@@ -25,19 +25,14 @@ export interface Contractor {
   updatedAt: string;
 }
 
+/** A project site. Its attendance rules live in attendance policies (see domain/policy.ts). */
 export interface Project {
   id: string;
   name: string;
   location: string;
   isActive: boolean;
-  /** IANA timezone, e.g. "Asia/Kolkata". */
+  /** IANA timezone, e.g. "Asia/Kolkata". Locked once the site has attendance. */
   timezone: string;
-  /** Suggested check-in time shown for pending workers, "HH:mm". Not proof of attendance. */
-  defaultCheckIn: string;
-  /** When true, an OUT time earlier than IN is treated as the next calendar day. */
-  allowOvernight: boolean;
-  /** How many past days operators may still edit. 0 = today only. Admins can always correct. */
-  operatorBackdateDays: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -84,6 +79,8 @@ export interface OperatorAccess {
 
 export type AttendanceStatus = "pending" | "present" | "absent";
 export type ChangeMethod = "individual" | "bulk";
+/** How an IN time was recorded: typed/picked by the operator, or the site's suggested time accepted as-is. */
+export type CheckInSource = "entered" | "suggested";
 
 export interface AttendanceRecord {
   id: string;
@@ -95,6 +92,8 @@ export interface AttendanceRecord {
   status: AttendanceStatus;
   checkInAt: string | null;
   checkOutAt: string | null;
+  /** null for absent/pending, and for present records saved before this was tracked. */
+  checkInSource: CheckInSource | null;
   method: ChangeMethod;
   version: number;
   createdAt: string;
@@ -129,6 +128,8 @@ export interface AttendanceSnapshot {
   status: AttendanceStatus;
   checkInAt: string | null;
   checkOutAt: string | null;
+  /** Absent from audit entries written before this was tracked. */
+  checkInSource?: CheckInSource | null;
 }
 
 export interface AuditLog {

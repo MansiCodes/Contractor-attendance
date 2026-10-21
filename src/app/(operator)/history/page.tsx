@@ -5,7 +5,8 @@ import { AttendanceBar, EmptyState, Group, PageHeader } from "@/components/kit";
 import { dailySummaries } from "@/lib/server/services/attendance";
 import { accessibleProjects } from "@/lib/server/services/context";
 import { requirePageContext } from "@/lib/server/session";
-import { DEFAULT_TIMEZONE, formatDateHeading, todayIn } from "@/lib/domain/time";
+import { FALLBACK_TIMEZONE } from "@/lib/domain/policy";
+import { formatDateHeading, todayIn } from "@/lib/domain/time";
 import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "History" };
@@ -21,7 +22,8 @@ export default async function HistoryPage({ searchParams }: { searchParams: Sear
   const byDate = new Map<string, typeof days>();
   for (const d of days) byDate.set(d.date, [...(byDate.get(d.date) ?? []), d]);
   const multiSite = projects.length > 1;
-  const today = todayIn(DEFAULT_TIMEZONE, ctx.now);
+  // "Today" as the selected site (or the first of the operator's sites) sees it.
+  const today = todayIn((projects.find((p) => p.id === projectId) ?? projects[0])?.timezone ?? FALLBACK_TIMEZONE, ctx.now);
 
   return (
     <div className="space-y-6">

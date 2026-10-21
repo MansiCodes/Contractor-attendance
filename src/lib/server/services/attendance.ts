@@ -1,16 +1,15 @@
-import { conflict, forbidden, invalid } from "@/lib/errors";
+import { conflict, forbidden, invalid, staleSettings } from "@/lib/errors";
+import { FALLBACK_TIMEZONE, evaluateEntry, operatorEditClosesAt, type PolicyValues, type ResolvedPolicy } from "@/lib/domain/policy";
 import { assignmentCovers, registerEntries } from "@/lib/domain/register";
 import { buildReport } from "@/lib/domain/report";
 import { attendanceBatch } from "@/lib/domain/schemas";
-import { addDays, instantToLocal, isValidDate, nowTimeIn, resolveShift, todayIn } from "@/lib/domain/time";
-import type { AttendanceStatus, ChangeMethod, Project } from "@/lib/domain/types";
+import { addDays, formatTime12, instantToLocal, isValidDate, nowTimeIn, todayIn } from "@/lib/domain/time";
+import type { AttendanceRecord, AttendanceStatus, ChangeMethod, CheckInSource, Project } from "@/lib/domain/types";
 import type { AttendanceWrite } from "../store/types";
-import { accessibleProjectIds, accessibleProjects, assertProjectAccess, type ServiceContext } from "./context";
+import { accessibleProjectIds, accessibleProjects, assertProjectAccess, canEditDate, sitePolicies, type ServiceContext } from "./context";
 
-/** An OUT time may not be recorded ahead of the clock (small allowance for clock skew). */
-const OUT_FUTURE_TOLERANCE_MIN = 5;
-/** IN may be confirmed slightly ahead of the shift start, but not hours in advance. */
-const IN_FUTURE_TOLERANCE_MIN = 60;
+// Every rule here (suggested IN, overnight, future-time limits, the operator edit
+// window) comes from the site's attendance policy; nothing is hardcoded.
 
 export interface SavedEntryDTO {
   recordId: string;
@@ -18,6 +17,10 @@ export interface SavedEntryDTO {
   checkIn: string | null;
   checkOut: string | null;
   checkOutNextDay: boolean;
+  /** exact stored instants, so an untouched time is never rewritten */
+  checkInAt: string | null;
+  checkOutAt: string | null;
+  checkInSource: CheckInSource | null;
   version: number;
   method: ChangeMethod;
 }
@@ -31,25 +34,55 @@ export interface RegisterRowDTO {
   saved: SavedEntryDTO | null;
 }
 
+/** The site's rules as the register needs them (effective values only: no history or notes). */
+export interface RegisterPolicyDTO {
+  /** in force on the register date */
+  day: PolicyValues;
+  /** in force on the site's today */
+  capture: Pick<PolicyValues, "inFutureToleranceMin" | "outFutureToleranceMin" | "operatorBackdateDays" | "editCutoffTime">;
+  /** when site operators lose edit access to this date (ISO) */
+  operatorEditClosesAt: string;
+  /** that moment has passed (for "Absent – not marked") */
+  operatorWindowClosed: boolean;
+  /** sent back on save to detect a settings change while editing */
+  token: string;
+}
+
 export interface RegisterView {
   projects: { id: string; name: string; location: string }[];
-  project: Pick<Project, "id" | "name" | "location" | "timezone" | "defaultCheckIn" | "allowOvernight" | "operatorBackdateDays"> | null;
+  project: Pick<Project, "id" | "name" | "location" | "timezone"> | null;
+  policy: RegisterPolicyDTO | null;
   contractors: { id: string; name: string; photoUrl: string | null; workerCount: number }[];
   contractorId: string | null;
   date: string;
   today: string;
   nowTime: string;
-  /** earliest date the current user may edit */
-  minEditableDate: string;
   editable: boolean;
   readOnlyReason: string | null;
   rows: RegisterRowDTO[];
 }
 
-function editWindow(ctx: ServiceContext, project: Project) {
-  const today = todayIn(project.timezone, ctx.now);
-  const minEditableDate = ctx.actor.role === "admin" ? "2000-01-01" : addDays(today, -project.operatorBackdateDays);
-  return { today, minEditableDate };
+function toSavedDTO(r: AttendanceRecord, timezone: string): SavedEntryDTO {
+  const inL = r.checkInAt ? instantToLocal(r.checkInAt, timezone) : null;
+  const outL = r.checkOutAt ? instantToLocal(r.checkOutAt, timezone) : null;
+  return {
+    recordId: r.id, status: r.status, checkIn: inL?.time ?? null, checkOut: outL?.time ?? null,
+    checkOutNextDay: !!outL && outL.date > r.workDate, checkInAt: r.checkInAt, checkOutAt: r.checkOutAt,
+    checkInSource: r.checkInSource, version: r.version, method: r.method,
+  };
+}
+
+/** Effective values only, without which versions they came from. */
+function withoutIds(p: ResolvedPolicy): PolicyValues {
+  const { companyPolicyId, sitePolicyId, ...values } = p;
+  void companyPolicyId;
+  void sitePolicyId;
+  return values;
+}
+
+function closedReason(date: string, today: string, closesAt: Date, timezone: string) {
+  if (date < today) return "Past dates can only be corrected by NF head office.";
+  return `Today's attendance closed for site operators at ${formatTime12(instantToLocal(closesAt.toISOString(), timezone).time)}. Please contact NF head office for corrections.`;
 }
 
 export async function loadRegister(
@@ -62,17 +95,19 @@ export async function loadRegister(
   const projectList = visible.map((p) => ({ id: p.id, name: p.name, location: p.location }));
 
   if (!project) {
-    const today = todayIn("Asia/Kolkata", ctx.now);
+    const today = todayIn(FALLBACK_TIMEZONE, ctx.now);
     return {
-      projects: projectList, project: null, contractors: [], contractorId: null, date: today, today,
-      nowTime: nowTimeIn("Asia/Kolkata", ctx.now), minEditableDate: today, editable: false,
+      projects: projectList, project: null, policy: null, contractors: [], contractorId: null, date: today, today,
+      nowTime: nowTimeIn(FALLBACK_TIMEZONE, ctx.now), editable: false,
       readOnlyReason: "No project sites are assigned to you yet. Please contact NF head office.", rows: [],
     };
   }
 
-  const { today, minEditableDate } = editWindow(ctx, project);
+  const today = todayIn(project.timezone, ctx.now);
   let date = query.date && isValidDate(query.date) ? query.date : today;
   if (date > today) date = today;
+  const policies = await sitePolicies(ctx, project, date);
+  const closesAt = operatorEditClosesAt(policies.capture, date, project.timezone);
 
   const [contractors, cpas, workers, assignments, records] = await Promise.all([
     ctx.store.listContractors(),
@@ -103,42 +138,42 @@ export async function loadRegister(
     ? registerEntries({ projectId: project.id, contractorId, date, workers, assignments, records })
     : [];
 
-  const rows: RegisterRowDTO[] = entries.map((e) => {
-    const r = e.record;
-    let saved: SavedEntryDTO | null = null;
-    if (r) {
-      const inL = r.checkInAt ? instantToLocal(r.checkInAt, project.timezone) : null;
-      const outL = r.checkOutAt ? instantToLocal(r.checkOutAt, project.timezone) : null;
-      saved = {
-        recordId: r.id, status: r.status, checkIn: inL?.time ?? null, checkOut: outL?.time ?? null,
-        checkOutNextDay: !!outL && outL.date > date, version: r.version, method: r.method,
-      };
-    }
-    return { workerId: e.worker.id, workerCode: e.worker.code, workerName: e.worker.fullName, contractorId: e.contractorId, assigned: e.assigned, saved };
-  });
+  const rows: RegisterRowDTO[] = entries.map((e) => ({
+    workerId: e.worker.id, workerCode: e.worker.code, workerName: e.worker.fullName, contractorId: e.contractorId,
+    assigned: e.assigned, saved: e.record ? toSavedDTO(e.record, project.timezone) : null,
+  }));
 
   let editable = true;
   let readOnlyReason: string | null = null;
-  if (date < minEditableDate) {
+  if (!canEditDate(ctx, project, date, policies)) {
     editable = false;
-    readOnlyReason = "Past dates can only be corrected by NF head office.";
+    readOnlyReason = closedReason(date, today, closesAt, project.timezone);
   } else if (!project.isActive) {
     editable = ctx.actor.role === "admin";
     readOnlyReason = editable ? null : "This project site is inactive.";
   }
 
+  const day = withoutIds(policies.day);
   return {
     projects: projectList,
-    project: {
-      id: project.id, name: project.name, location: project.location, timezone: project.timezone,
-      defaultCheckIn: project.defaultCheckIn, allowOvernight: project.allowOvernight, operatorBackdateDays: project.operatorBackdateDays,
+    project: { id: project.id, name: project.name, location: project.location, timezone: project.timezone },
+    policy: {
+      day,
+      capture: {
+        inFutureToleranceMin: policies.capture.inFutureToleranceMin,
+        outFutureToleranceMin: policies.capture.outFutureToleranceMin,
+        operatorBackdateDays: policies.capture.operatorBackdateDays,
+        editCutoffTime: policies.capture.editCutoffTime,
+      },
+      operatorEditClosesAt: closesAt.toISOString(),
+      operatorWindowClosed: ctx.now.getTime() >= closesAt.getTime(),
+      token: policies.token,
     },
     contractors: contractorList,
     contractorId,
     date,
     today,
     nowTime: nowTimeIn(project.timezone, ctx.now),
-    minEditableDate,
     editable,
     readOnlyReason,
     rows,
@@ -150,15 +185,24 @@ export interface SaveResult {
   rows: { workerId: string; saved: SavedEntryDTO | null }[];
 }
 
+/**
+ * Saves a batch for one site, contractor and date. Individual taps and bulk actions
+ * arrive here the same way and every item goes through the same evaluateEntry().
+ */
 export async function saveAttendance(ctx: ServiceContext, raw: unknown): Promise<SaveResult> {
   const input = attendanceBatch.parse(raw);
   const project = await assertProjectAccess(ctx, input.projectId);
   const isAdmin = ctx.actor.role === "admin";
   if (!project.isActive && !isAdmin) throw forbidden("This project site is inactive");
 
-  const { today, minEditableDate } = editWindow(ctx, project);
-  if (input.workDate > today) throw invalid("Attendance cannot be recorded for a future date");
-  if (input.workDate < minEditableDate) throw forbidden("Past dates can only be corrected by NF head office");
+  const policies = await sitePolicies(ctx, project, input.workDate);
+  if (input.workDate > policies.today) throw invalid("Attendance cannot be recorded for a future date");
+  if (!canEditDate(ctx, project, input.workDate, policies)) {
+    throw forbidden(closedReason(input.workDate, policies.today, operatorEditClosesAt(policies.capture, input.workDate, project.timezone), project.timezone).replace(/\.$/, ""));
+  }
+  if (input.policyToken && input.policyToken !== policies.token) {
+    throw staleSettings("Attendance settings for this site changed while you were editing. Reload to see them; your unsaved changes stay on this device.");
+  }
 
   const [workers, assignments, records] = await Promise.all([
     ctx.store.listWorkers(),
@@ -169,7 +213,7 @@ export async function saveAttendance(ctx: ServiceContext, raw: unknown): Promise
     projectId: project.id, contractorId: input.contractorId, date: input.workDate, workers, assignments, records,
   });
   const byWorker = new Map(entries.map((e) => [e.worker.id, e]));
-  const nowMs = ctx.now.getTime();
+  const entryCtx = { workDate: input.workDate, timezone: project.timezone, dayPolicy: policies.day, capturePolicy: policies.capture, now: ctx.now };
 
   const writes: AttendanceWrite[] = [];
   for (const item of input.items) {
@@ -180,48 +224,20 @@ export async function saveAttendance(ctx: ServiceContext, raw: unknown): Promise
     if ((rec?.version ?? null) !== item.expectedVersion) {
       throw conflict(`${name}'s attendance was changed by someone else. Reload to see the latest entries.`);
     }
+    if (item.status === "pending" && !rec) continue; // nothing recorded, nothing to reset
 
-    let checkInAt: string | null = null;
-    let checkOutAt: string | null = null;
-    if (item.status === "pending") {
-      if (!rec) continue; // nothing recorded, nothing to reset
-    } else if (item.status === "present") {
-      if (!item.checkIn) throw invalid(`${name}: IN time is required to mark present`);
-      const shift = resolveShift(input.workDate, item.checkIn, item.checkOut, project.timezone, project.allowOvernight);
-      if (!shift.ok) throw invalid(`${name}: ${shift.error}`);
-      if (new Date(shift.checkInAt).getTime() > nowMs + IN_FUTURE_TOLERANCE_MIN * 60000) {
-        throw invalid(`${name}: IN time is in the future`);
-      }
-      if (shift.checkOutAt && new Date(shift.checkOutAt).getTime() > nowMs + OUT_FUTURE_TOLERANCE_MIN * 60000) {
-        throw invalid(`${name}: OUT time cannot be in the future`);
-      }
-      checkInAt = shift.checkInAt;
-      checkOutAt = shift.checkOutAt;
-    }
-
-    if (rec && rec.status === item.status && rec.checkInAt === checkInAt && rec.checkOutAt === checkOutAt) continue;
+    const verdict = evaluateEntry(entryCtx, item, rec);
+    if (!verdict.ok) throw invalid(`${name}: ${verdict.error}`);
+    if (rec && rec.status === item.status && rec.checkInAt === verdict.checkInAt && rec.checkOutAt === verdict.checkOutAt) continue;
     writes.push({
-      workerId: item.workerId, contractorId: entry.contractorId, status: item.status, checkInAt, checkOutAt,
-      method: item.method, expectedVersion: item.expectedVersion,
+      workerId: item.workerId, contractorId: entry.contractorId, status: item.status, checkInAt: verdict.checkInAt,
+      checkOutAt: verdict.checkOutAt, checkInSource: verdict.checkInSource, method: item.method, expectedVersion: item.expectedVersion,
     });
   }
 
   if (writes.length === 0) return { saved: 0, rows: [] };
   const saved = await ctx.store.saveAttendance(project.id, input.workDate, writes, ctx.actor);
-  return {
-    saved: saved.length,
-    rows: saved.map((r) => {
-      const inL = r.checkInAt ? instantToLocal(r.checkInAt, project.timezone) : null;
-      const outL = r.checkOutAt ? instantToLocal(r.checkOutAt, project.timezone) : null;
-      return {
-        workerId: r.workerId,
-        saved: {
-          recordId: r.id, status: r.status, checkIn: inL?.time ?? null, checkOut: outL?.time ?? null,
-          checkOutNextDay: !!outL && outL.date > input.workDate, version: r.version, method: r.method,
-        },
-      };
-    }),
-  };
+  return { saved: saved.length, rows: saved.map((r) => ({ workerId: r.workerId, saved: toSavedDTO(r, project.timezone) })) };
 }
 
 export interface DaySummary {
@@ -243,23 +259,26 @@ export async function dailySummaries(ctx: ServiceContext, q: { days: number; pro
   const ids = await accessibleProjectIds(ctx);
   const selected = projects.filter((p) => !q.projectId || p.id === q.projectId);
   if (selected.length === 0) return [];
-  const today = todayIn(selected[0].timezone, ctx.now);
-  const from = addDays(today, -(q.days - 1));
+  // Each site counts its own last N days, ending at its own local today.
+  const todayByProject = Object.fromEntries(selected.map((p) => [p.id, todayIn(p.timezone, ctx.now)]));
+  const todays = Object.values(todayByProject).sort();
+  const from = addDays(todays[0], -(q.days - 1));
+  const to = todays[todays.length - 1];
   const projectIds = selected.map((p) => p.id);
   const [contractors, workers, assignments, records] = await Promise.all([
     ctx.store.listContractors(),
     ctx.store.listWorkers(),
     ctx.store.listWorkerAssignments(),
-    ctx.store.listAttendance({ projectIds: ids === null ? projectIds : projectIds.filter((p) => ids.includes(p)), from, to: today }),
+    ctx.store.listAttendance({ projectIds: ids === null ? projectIds : projectIds.filter((p) => ids.includes(p)), from, to }),
   ]);
   const report = buildReport({
-    from, to: today, projects: selected, contractors, workers,
+    from, to, projects: selected, contractors, workers,
     assignments: assignments.filter((a) => projectIds.includes(a.projectId)),
-    records, rules: [],
-    todayByProject: Object.fromEntries(selected.map((p) => [p.id, todayIn(p.timezone, ctx.now)])),
+    records, rules: [], todayByProject,
   });
   const map = new Map<string, DaySummary>();
   for (const row of report.rows) {
+    if (row.workDate < addDays(todayByProject[row.projectId], -(q.days - 1))) continue;
     const key = `${row.workDate}:${row.projectId}:${row.contractorId}`;
     let s = map.get(key);
     if (!s) {

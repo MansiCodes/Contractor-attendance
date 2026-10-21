@@ -122,3 +122,32 @@ test("history lists past days read-only for operators", async ({ page }) => {
   await expect(page.getByText("Past dates can only be corrected by NF head office.")).toBeVisible();
   await expect(page.getByTestId("present-button").first()).toBeDisabled();
 });
+
+test("a site without a suggested time asks for the IN time, one by one or in bulk", async ({ page }) => {
+  await loginAs(page, "demo-op-east");
+  await page.getByTestId("project-select").selectOption({ label: "Water Treatment Plant Fire Systems (Demo) — Guwahati, Assam" });
+  await page.waitForURL(/project=p4/);
+  const total = await count(page, "all");
+  expect(await count(page, "pending")).toBe(total);
+  // No time is assumed: the IN slot asks to be set.
+  await expect(row(page, 0).getByTestId("in-button")).toContainText("Set");
+  await expect(page.getByTestId("bulk-present")).toContainText("Choose one IN time");
+
+  // P opens the time picker instead of filling in a default.
+  await row(page, 0).getByTestId("present-button").click();
+  await expect(page.getByRole("dialog")).toContainText("Check-in time");
+  await expect(row(page, 0)).toHaveAttribute("data-status", "pending");
+  await page.getByRole("button", { name: "Now" }).click();
+  await page.getByRole("button", { name: /^Set IN/ }).click();
+  await expect(row(page, 0)).toHaveAttribute("data-status", "present");
+
+  // Bulk present asks for one time for everyone still pending.
+  await page.getByTestId("bulk-present").click();
+  await expect(page.getByRole("dialog")).toContainText(`IN time for ${total - 1} pending workers`);
+  await page.getByRole("button", { name: "Now" }).click();
+  await page.getByRole("button", { name: /^Mark present/ }).click();
+  expect(await count(page, "present")).toBe(total);
+
+  await page.getByTestId("save-button").click();
+  await expect(page.getByText(`${total} changes saved`)).toBeVisible();
+});

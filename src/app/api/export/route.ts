@@ -1,9 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { buildAttendanceWorkbook } from "@/lib/export/xlsx";
 import { toActionError } from "@/lib/server/actions/run";
+import { headOfficeTimezone } from "@/lib/server/services/context";
 import { getReport } from "@/lib/server/services/reports";
 import { getContext } from "@/lib/server/session";
-import { DEFAULT_TIMEZONE, instantToLocal, monthRange, todayIn } from "@/lib/domain/time";
+import { instantToLocal, monthRange } from "@/lib/domain/time";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,7 +13,9 @@ export async function GET(request: NextRequest) {
   try {
     const ctx = await getContext();
     const sp = request.nextUrl.searchParams;
-    const month = monthRange(todayIn(DEFAULT_TIMEZONE, ctx.now));
+    const tz = await headOfficeTimezone(ctx);
+    const now = instantToLocal(ctx.now.toISOString(), tz);
+    const month = monthRange(now.date);
     const filter = {
       from: sp.get("from") || month.from,
       to: sp.get("to") || month.to,
@@ -21,9 +24,8 @@ export async function GET(request: NextRequest) {
     };
     const report = await getReport(ctx, filter); // admin-only, enforced in the service
     const [projects, contractors] = await Promise.all([ctx.store.listProjects(), ctx.store.listContractors()]);
-    const now = instantToLocal(ctx.now.toISOString(), DEFAULT_TIMEZONE);
     const buffer = await buildAttendanceWorkbook(report, {
-      generatedAt: `${now.date} ${now.time} IST`,
+      generatedAt: `${now.date} ${now.time} (${tz})`,
       generatedBy: ctx.actor.fullName,
       projectLabel: projects.find((p) => p.id === filter.projectId)?.name ?? "All projects",
       contractorLabel: contractors.find((c) => c.id === filter.contractorId)?.name ?? "All contractors",

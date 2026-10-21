@@ -3,8 +3,9 @@
 import { memo } from "react";
 import { Check, Plus, X } from "lucide-react";
 import { StatusPill, type Tone } from "@/components/kit";
+import type { DayLabels } from "@/lib/domain/policy";
 import { formatMinutes, formatTime12 } from "@/lib/domain/time";
-import type { AttendanceStatus } from "@/lib/domain/types";
+import type { AttendanceStatus, CheckInSource } from "@/lib/domain/types";
 import { cn } from "@/lib/utils";
 
 export interface RowState {
@@ -12,9 +13,12 @@ export interface RowState {
   checkIn: string | null;
   checkOut: string | null;
   checkOutNextDay: boolean;
+  checkInSource: CheckInSource | null;
   dirty: boolean;
   bulk: boolean;
   workedMinutes: number | null;
+  /** attendance-policy labels (display only) */
+  labels: DayLabels;
 }
 
 export interface WorkerRowProps {
@@ -22,7 +26,8 @@ export interface WorkerRowProps {
   name: string;
   code: string;
   state: RowState;
-  suggestedIn: string;
+  /** the site's suggested IN time, or null when the site has none */
+  suggestedIn: string | null;
   editable: boolean;
   /** register date is today (a missing OUT is expected, not yet overdue) */
   isToday: boolean;
@@ -36,9 +41,9 @@ export interface WorkerRowProps {
 export const ROW_GRID =
   "grid grid-cols-[auto_auto_minmax(0,1fr)_auto] [grid-template-areas:'name_name_name_status'_'in_out_._mark'] gap-x-2 gap-y-2 md:grid-cols-[minmax(0,1fr)_8.5rem_6.5rem_6.5rem_5.75rem] md:[grid-template-areas:'name_status_in_out_mark'] md:gap-x-3 lg:grid-cols-[minmax(0,1fr)_9rem_7.5rem_7.5rem_13rem] lg:gap-x-4";
 
-export function displayStatus(s: Pick<RowState, "status" | "checkOut">, isToday: boolean): { label: string; tone: Tone } {
+export function displayStatus(s: Pick<RowState, "status" | "checkOut" | "labels">, isToday: boolean): { label: string; tone: Tone } {
   if (s.status === "absent") return { label: "Absent", tone: "absent" };
-  if (s.status === "pending") return { label: "Pending", tone: "pending" };
+  if (s.status === "pending") return s.labels.notMarkedAbsent ? { label: "Absent – not marked", tone: "absent" } : { label: "Pending", tone: "pending" };
   if (s.checkOut) return { label: "Completed", tone: "present" };
   return isToday ? { label: "Present", tone: "present" } : { label: "Checkout pending", tone: "pending" };
 }
@@ -50,8 +55,14 @@ export const WorkerRow = memo(function WorkerRow(p: WorkerRowProps) {
   const isPending = s.status === "pending";
   const status = displayStatus(s, p.isToday);
   const needsOut = isPresent && !s.checkOut;
-  /** the 9 AM suggestion is only shown where it can still be confirmed */
-  const suggested = isPending && p.editable;
+  /** the site's suggestion is only shown where it can still be confirmed */
+  const suggested = isPending && p.editable && p.suggestedIn !== null;
+  const needsIn = isPending && p.editable && p.suggestedIn === null;
+  const notes = [
+    s.labels.lateMinutes !== null ? `Late ${formatMinutes(s.labels.lateMinutes)}` : null,
+    s.labels.halfDay ? "Half day" : null,
+    s.labels.overtimeMinutes !== null ? `OT ${formatMinutes(s.labels.overtimeMinutes)}` : null,
+  ].filter((n): n is string => !!n);
 
   return (
     <li
@@ -73,6 +84,12 @@ export const WorkerRow = memo(function WorkerRow(p: WorkerRowProps) {
           {s.bulk && !s.dirty && (
             <span>
               <span className="max-md:hidden"> · </span>Bulk confirmed
+            </span>
+          )}
+          {notes.length > 0 && !s.dirty && (
+            <span className="font-medium text-pending" data-testid="row-labels">
+              <span className="max-md:hidden"> · </span>
+              {notes.join(" · ")}
             </span>
           )}
           {s.dirty && (
@@ -98,18 +115,26 @@ export const WorkerRow = memo(function WorkerRow(p: WorkerRowProps) {
         aria-label={`Edit IN time for ${p.name}`}
         className={cn(
           "flex h-11 w-25 flex-col justify-center rounded-lg px-2.5 text-left transition-[background-color,border-color,transform] duration-150 [grid-area:in] active:scale-[0.97] disabled:active:scale-100 md:w-full",
-          suggested && "border border-dashed border-subtle-foreground/55 bg-card hover:border-foreground/50",
+          (suggested || needsIn) && "border border-dashed border-subtle-foreground/55 bg-card hover:border-foreground/50",
           isPending && !p.editable && "bg-muted/50 text-subtle-foreground",
           isPresent && "bg-muted enabled:hover:bg-border/70",
           isAbsent && "bg-muted/50 text-subtle-foreground",
         )}
       >
-        <span className="text-2xs leading-4 font-medium text-muted-foreground">
-          IN{suggested && <span className="font-normal"> · suggested</span>}
+        <span className="truncate text-2xs leading-4 font-medium text-muted-foreground">
+          IN
+          {suggested && <span className="font-normal"> · suggested</span>}
+          {isPresent && s.checkInSource === "suggested" && <span className="font-normal"> · as suggested</span>}
         </span>
-        <span className={cn("tabular text-md leading-5 font-semibold", isPending && "font-medium text-muted-foreground")}>
-          {isAbsent || (isPending && !p.editable) ? "—" : formatTime12(s.checkIn ?? p.suggestedIn)}
-        </span>
+        {needsIn ? (
+          <span className="flex items-center gap-1 text-sm leading-5 font-semibold text-muted-foreground">
+            <Plus className="size-3.5" strokeWidth={2.75} /> Set
+          </span>
+        ) : (
+          <span className={cn("tabular text-md leading-5 font-semibold", isPending && "font-medium text-muted-foreground")}>
+            {isAbsent || (isPending && !p.editable) || !(s.checkIn ?? p.suggestedIn) ? "—" : formatTime12((s.checkIn ?? p.suggestedIn)!)}
+          </span>
+        )}
       </button>
 
       {/* OUT */}

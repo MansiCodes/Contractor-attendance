@@ -1,8 +1,10 @@
+import type { AttendancePolicyVersion, ResolvedPolicy } from "@/lib/domain/policy";
 import type {
   Actor,
   AttendanceRecord,
   AttendanceStatus,
   AuditLog,
+  CheckInSource,
   ChangeMethod,
   Contractor,
   ContractorProjectAssignment,
@@ -25,6 +27,7 @@ export interface AttendanceWrite {
   status: AttendanceStatus;
   checkInAt: string | null;
   checkOutAt: string | null;
+  checkInSource: CheckInSource | null;
   method: ChangeMethod;
   expectedVersion: number | null;
 }
@@ -34,10 +37,9 @@ export interface ProjectFields {
   location: string;
   isActive: boolean;
   timezone: string;
-  defaultCheckIn: string;
-  allowOvernight: boolean;
-  operatorBackdateDays: number;
 }
+
+export type AttendancePolicyFields = Omit<AttendancePolicyVersion, "id" | "version" | "createdAt" | "createdBy">;
 
 export type PaymentRuleFields = Omit<PaymentRule, "id" | "version" | "createdAt" | "createdBy">;
 
@@ -69,6 +71,12 @@ export interface DataStore {
   listOperatorAccess(): Promise<OperatorAccess[]>;
   listAttendance(q: AttendanceQuery): Promise<AttendanceRecord[]>;
   listPaymentRules(): Promise<PaymentRule[]>;
+  /** Raw versions (history, notes, authors). Admin only: the live store returns none to operators. */
+  listAttendancePolicies(): Promise<AttendancePolicyVersion[]>;
+  /** The values in force for a site on a date. Callers check site access first. */
+  getEffectivePolicy(projectId: string, date: string): Promise<ResolvedPolicy>;
+  /** Project ids that have at least one attendance record (their timezone is locked). */
+  listProjectsWithAttendance(): Promise<string[]>;
   listAuditLogs(q: AuditQuery): Promise<AuditLog[]>;
 
   createContractor(input: { name: string; location: string }, actor: Actor): Promise<Contractor>;
@@ -95,6 +103,8 @@ export interface DataStore {
   setProfileActive(id: string, isActive: boolean, actor: Actor): Promise<void>;
 
   createPaymentRule(input: PaymentRuleFields, actor: Actor): Promise<PaymentRule>;
+  /** Appends a new version; existing versions are never changed. */
+  createAttendancePolicy(input: AttendancePolicyFields, actor: Actor): Promise<AttendancePolicyVersion>;
 
   /** Atomic: either every item is written (with audit entries) or none are. */
   saveAttendance(projectId: string, workDate: string, items: AttendanceWrite[], actor: Actor): Promise<AttendanceRecord[]>;

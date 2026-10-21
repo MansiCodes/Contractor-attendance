@@ -1,4 +1,4 @@
-export type AppErrorCode = "unauthenticated" | "forbidden" | "not_found" | "invalid" | "conflict" | "config";
+export type AppErrorCode = "unauthenticated" | "forbidden" | "not_found" | "invalid" | "conflict" | "stale_settings" | "config";
 
 /** Errors that are safe to show to users. Anything else is reported generically. */
 export class AppError extends Error {
@@ -15,3 +15,5 @@ export const forbidden = (msg = "You do not have permission to do this") => new 
 export const notFound = (what = "Record") => new AppError(`${what} not found`, "not_found");
 export const invalid = (msg: string) => new AppError(msg, "invalid");
 export const conflict = (msg: string) => new AppError(msg, "conflict");
+/** The site's attendance settings changed after the register was loaded. */
+export const staleSettings = (msg: string) => new AppError(msg, "stale_settings");

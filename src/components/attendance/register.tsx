@@ -19,8 +19,9 @@ import { ContractorAvatar } from "@/components/contractor-avatar";
 import { AttendanceBar, EmptyState } from "@/components/kit";
 import { saveAttendanceAction } from "@/lib/server/actions/attendance";
 import type { RegisterView, SavedEntryDTO } from "@/lib/server/services/attendance";
-import { addDays, formatDateHeading, formatTime12, minutesBetween, nowTimeIn, resolveShift, roundTimeTo, shiftTime } from "@/lib/domain/time";
-import type { AttendanceStatus, ChangeMethod } from "@/lib/domain/types";
+import { dayLabels, evaluateEntry, FALLBACK_POLICY, FALLBACK_TIMEZONE, NO_LABELS, type EntryInput, type PreviousEntry } from "@/lib/domain/policy";
+import { addDays, formatDateHeading, formatTime12, minutesBetween, nowTimeIn, roundTimeTo, shiftTime } from "@/lib/domain/time";
+import type { AttendanceStatus, ChangeMethod, CheckInSource } from "@/lib/domain/types";
 import { cn } from "@/lib/utils";
 import { TimeSheet } from "./time-sheet";
 import { ROW_GRID, WorkerRow, type RowState } from "./worker-row";
@@ -29,6 +30,8 @@ interface Draft {
   status: AttendanceStatus;
   checkIn: string | null;
   checkOut: string | null;
+  /** "suggested" only when the site's suggested IN was accepted unchanged */
+  checkInSource: CheckInSource | null;
   method: ChangeMethod;
   /** version of the saved record when editing started (null = no record yet) */
   baseVersion: number | null;
@@ -36,10 +39,10 @@ interface Draft {
 type Drafts = Record<string, Draft>;
 
 type Filter = "all" | "present" | "absent" | "pending";
-type SheetState = { kind: "in" | "out"; workerId: string; nowMs: number } | { kind: "bulk-out"; nowMs: number } | null;
+type SheetState = { kind: "in" | "out"; workerId: string; nowMs: number } | { kind: "bulk-out" | "bulk-in"; nowMs: number } | null;
 
-const OUT_FUTURE_TOLERANCE_MS = 5 * 60000;
-const IN_FUTURE_TOLERANCE_MS = 60 * 60000;
+/** Far future: evaluates an entry for display without the future-time limits. */
+const DISPLAY_NOW = new Date(8.64e15);
 /** Lists longer than this get a search field. */
 const SEARCH_THRESHOLD = 8;
 
@@ -76,7 +79,7 @@ export interface AttendanceRegisterProps {
 export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery, heading = "Attendance" }: AttendanceRegisterProps) {
   const router = useRouter();
   const project = view.project;
-  const storageKey = project && view.contractorId ? `nf-att:v1:${project.id}:${view.contractorId}:${view.date}` : null;
+  const storageKey = project && view.contractorId ? `nf-att:v2:${project.id}:${view.contractorId}:${view.date}` : null;
 
   const stored = useSyncExternalStore(
     subscribeStorage,
@@ -168,9 +171,13 @@ export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery
     return () => window.removeEventListener("beforeunload", handler);
   }, [dirtyCount]);
 
-  const suggestedIn = project?.defaultCheckIn ?? "09:00";
-  const tz = project?.timezone ?? "Asia/Kolkata";
-  const overnight = project?.allowOvernight ?? false;
+  // Everything below comes from the site's attendance policy (resolved on the server).
+  const day = view.policy?.day ?? FALLBACK_POLICY;
+  const capture = view.policy?.capture ?? FALLBACK_POLICY;
+  const suggestedIn = day.suggestedCheckIn;
+  const tz = project?.timezone ?? FALLBACK_TIMEZONE;
+  const overnight = day.allowOvernight;
+  const windowClosed = view.policy?.operatorWindowClosed ?? false;
 
   const baseState = useCallback(
     (workerId: string) => {
@@ -180,10 +187,32 @@ export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery
         status: saved?.status ?? ("pending" as AttendanceStatus),
         checkIn: saved?.checkIn ?? null,
         checkOut: saved?.checkOut ?? null,
+        checkInSource: saved?.checkInSource ?? null,
         version: saved?.version ?? null,
       };
     },
     [],
+  );
+
+  /** What is stored for each worker, exactly (so untouched times keep their stored instants). */
+  const previousById = useMemo(() => {
+    const m = new Map<string, PreviousEntry | null>();
+    for (const r of view.rows) {
+      const s = savedFor(r.workerId, r.saved);
+      m.set(r.workerId, s ? { status: s.status, checkInAt: s.checkInAt, checkOutAt: s.checkOutAt, checkInSource: s.checkInSource } : null);
+    }
+    return m;
+  }, [view.rows, savedFor]);
+
+  /** The same check the server runs on save, for individual and bulk changes alike. */
+  const check = useCallback(
+    (workerId: string, entry: EntryInput, now: Date) =>
+      evaluateEntry(
+        { workDate: view.date, timezone: tz, dayPolicy: { suggestedCheckIn: suggestedIn, allowOvernight: overnight }, capturePolicy: capture, now },
+        entry,
+        previousById.get(workerId) ?? null,
+      ),
+    [view.date, tz, suggestedIn, overnight, capture, previousById],
   );
 
   /** Apply a change to one worker; drops the draft if it matches what is saved. */
@@ -206,19 +235,26 @@ export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery
       const d = draftsRef.current[workerId];
       if (d) return d;
       const b = baseState(workerId);
-      return { status: b.status, checkIn: b.checkIn, checkOut: b.checkOut, method: "individual" as ChangeMethod };
+      return { status: b.status, checkIn: b.checkIn, checkOut: b.checkOut, checkInSource: b.checkInSource, method: "individual" as ChangeMethod };
     },
     [baseState],
   );
 
+  // P accepts the site's suggested IN (flagged as such) only when it passes the same
+  // checks as any other entry; otherwise, or with no suggestion, it asks for the time.
   const onPresent = useCallback(
     (workerId: string) => {
       const c = current(workerId);
       if (c.status === "present") return;
-      touch([workerId]);
-      commit(applyChange(draftsRef.current, workerId, { status: "present", checkIn: c.checkIn ?? suggestedIn, checkOut: null, method: "individual" }));
+      const nowMs = Date.now();
+      if (suggestedIn && check(workerId, { status: "present", checkIn: suggestedIn, checkOut: null, checkInSource: "suggested" }, new Date(nowMs)).ok) {
+        touch([workerId]);
+        commit(applyChange(draftsRef.current, workerId, { status: "present", checkIn: suggestedIn, checkOut: null, checkInSource: "suggested", method: "individual" }));
+        return;
+      }
+      setSheet({ kind: "in", workerId, nowMs });
     },
-    [applyChange, commit, current, suggestedIn, touch],
+    [applyChange, check, commit, current, suggestedIn, touch],
   );
 
   const onAbsent = useCallback(
@@ -226,7 +262,7 @@ export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery
       const c = current(workerId);
       if (c.status === "absent") return;
       touch([workerId]);
-      commit(applyChange(draftsRef.current, workerId, { status: "absent", checkIn: null, checkOut: null, method: "individual" }));
+      commit(applyChange(draftsRef.current, workerId, { status: "absent", checkIn: null, checkOut: null, checkInSource: null, method: "individual" }));
     },
     [applyChange, commit, current, touch],
   );
@@ -242,30 +278,36 @@ export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery
       const status = d?.status ?? saved?.status ?? "pending";
       const checkIn = d ? d.checkIn : saved?.checkIn ?? null;
       const checkOut = d ? d.checkOut : saved?.checkOut ?? null;
+      const checkInSource = d ? d.checkInSource : saved?.checkInSource ?? null;
       let workedMinutes: number | null = null;
       let checkOutNextDay = false;
-      if (status === "present" && checkIn && checkOut) {
-        const s = resolveShift(view.date, checkIn, checkOut, tz, overnight);
-        if (s.ok && s.checkOutAt) {
-          workedMinutes = minutesBetween(s.checkInAt, s.checkOutAt);
-          checkOutNextDay = s.overnight;
-        }
+      let labels = NO_LABELS;
+      const v = status === "present" && checkIn ? check(row.workerId, { status, checkIn, checkOut, checkInSource: checkInSource ?? "entered" }, DISPLAY_NOW) : null;
+      if (v?.ok && v.checkInAt) {
+        if (v.checkOutAt) workedMinutes = minutesBetween(v.checkInAt, v.checkOutAt);
+        checkOutNextDay = v.checkOutNextDay;
+        labels = dayLabels(day, { status, checkInAt: v.checkInAt, checkOutAt: v.checkOutAt }, view.date, tz, windowClosed);
+      } else if (status === "pending") {
+        labels = dayLabels(day, null, view.date, tz, windowClosed);
       }
       const state: RowState = {
         status,
         checkIn: status === "present" ? checkIn : null,
         checkOut: status === "present" ? checkOut : null,
         checkOutNextDay,
+        checkInSource: status === "present" ? checkInSource : null,
         dirty: !!d,
         bulk: (d?.method ?? saved?.method) === "bulk" && status !== "pending",
         workedMinutes,
+        labels,
       };
       return { row, state };
     });
-  }, [view.rows, view.date, drafts, savedFor, tz, overnight]);
+  }, [view.rows, view.date, drafts, savedFor, tz, check, day, windowClosed]);
 
   const stateById = useMemo(() => new Map(rows.map((r) => [r.row.workerId, r.state])), [rows]);
-  const stateOf = (workerId: string) => stateById.get(workerId) ?? { status: "pending" as AttendanceStatus, checkIn: null, checkOut: null };
+  const stateOf = (workerId: string) =>
+    stateById.get(workerId) ?? { status: "pending" as AttendanceStatus, checkIn: null, checkOut: null, checkInSource: null as CheckInSource | null };
 
   const counts = useMemo(() => {
     const c = { total: rows.length, present: 0, absent: 0, pending: 0, outMissing: 0 };
@@ -292,22 +334,22 @@ export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery
   const isToday = view.date === view.today;
   const validateIn = (workerId: string, nowMs: number) => (time: string) => {
     const c = stateOf(workerId);
-    const s = resolveShift(view.date, time, c.checkOut, tz, overnight);
-    if (!s.ok) return c.checkOut ? `IN must be before the OUT time (${formatTime12(c.checkOut)})` : s.error;
-    if (new Date(s.checkInAt).getTime() > nowMs + IN_FUTURE_TOLERANCE_MS) return "IN time is in the future";
-    return null;
+    const v = check(workerId, { status: "present", checkIn: time, checkOut: c.checkOut, checkInSource: "entered" }, new Date(nowMs));
+    if (v.ok) return null;
+    return v.field === "out" && c.checkOut ? `IN must be before the OUT time (${formatTime12(c.checkOut)})` : v.error;
   };
-  const validateOut = (checkIn: string | null, nowMs: number) => (time: string) => {
-    if (!checkIn) return "Record the IN time first";
-    const s = resolveShift(view.date, checkIn, time, tz, overnight);
-    if (!s.ok) return `OUT must be after IN (${formatTime12(checkIn)})`;
-    if (s.checkOutAt && new Date(s.checkOutAt).getTime() > nowMs + OUT_FUTURE_TOLERANCE_MS) return "OUT time cannot be in the future";
-    return null;
+  const validateOut = (workerId: string, nowMs: number) => (time: string) => {
+    const c = stateOf(workerId);
+    if (!c.checkIn) return "Record the IN time first";
+    const v = check(workerId, { status: "present", checkIn: c.checkIn, checkOut: time, checkInSource: c.checkInSource ?? "entered" }, new Date(nowMs));
+    if (v.ok) return null;
+    return v.error === "OUT time must be after IN time" ? `OUT must be after IN (${formatTime12(c.checkIn)})` : v.error;
   };
-  const outNote = (checkIn: string | null) => (time: string) => {
-    if (!checkIn || !overnight) return null;
-    const s = resolveShift(view.date, checkIn, time, tz, true);
-    return s.ok && s.overnight ? "Next day (overnight shift)" : null;
+  const outNote = (workerId: string) => (time: string) => {
+    const c = stateOf(workerId);
+    if (!c.checkIn || !overnight) return null;
+    const v = check(workerId, { status: "present", checkIn: c.checkIn, checkOut: time, checkInSource: c.checkInSource ?? "entered" }, DISPLAY_NOW);
+    return v.ok && v.checkOutNextDay ? "Next day (overnight shift)" : null;
   };
   const nowFor = (nowMs: number) => roundTimeTo(nowTimeIn(tz, new Date(nowMs)), 5);
 
@@ -315,13 +357,33 @@ export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery
   const pendingIds = rows.filter((r) => r.state.status === "pending").map((r) => r.row.workerId);
   const outMissingIds = rows.filter((r) => r.state.status === "present" && !r.state.checkOut).map((r) => r.row.workerId);
 
-  const bulkConfirm = () => {
+  // Bulk present marks every pending worker with one IN time, through the same check as a
+  // single entry. With a suggested time it is offered first (flagged as accepted); otherwise,
+  // or if it is not valid yet, the operator chooses the time.
+  const bulkPresent = (time: string, source: CheckInSource, nowMs: number) => {
     let next = draftsRef.current;
-    for (const id of pendingIds) next = applyChange(next, id, { status: "present", checkIn: suggestedIn, checkOut: null, method: "bulk" });
+    for (const id of pendingIds) {
+      const v = check(id, { status: "present", checkIn: time, checkOut: null, checkInSource: source }, new Date(nowMs));
+      if (!v.ok) {
+        toast.error(v.error);
+        return false;
+      }
+      next = applyChange(next, id, { status: "present", checkIn: time, checkOut: null, checkInSource: source, method: "bulk" });
+    }
     touch(pendingIds);
     commit(next);
+    toast.success(`${pendingIds.length} workers marked present at ${formatTime12(time)}. Tap Save to keep.`);
+    return true;
+  };
+  const bulkConfirm = (nowMs: number) => {
     setBulkConfirmOpen(false);
-    toast.success(`${pendingIds.length} workers marked present at ${formatTime12(suggestedIn)}. Tap Save to keep.`);
+    if (!suggestedIn || !bulkPresent(suggestedIn, "suggested", nowMs)) setSheet({ kind: "bulk-in", nowMs });
+  };
+  const validateBulkIn = (nowMs: number) => (time: string) => {
+    const first = pendingIds[0];
+    if (!first) return null;
+    const v = check(first, { status: "present", checkIn: time, checkOut: null, checkInSource: "entered" }, new Date(nowMs));
+    return v.ok ? null : v.error;
   };
 
   const bulkOut = (time: string, nowMs: number) => {
@@ -330,11 +392,11 @@ export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery
     let skipped = 0;
     for (const id of outMissingIds) {
       const c = stateOf(id);
-      if (validateOut(c.checkIn, nowMs)(time)) {
+      if (validateOut(id, nowMs)(time)) {
         skipped++;
         continue;
       }
-      next = applyChange(next, id, { status: "present", checkIn: c.checkIn, checkOut: time, method: "bulk" });
+      next = applyChange(next, id, { status: "present", checkIn: c.checkIn, checkOut: time, checkInSource: c.checkInSource, method: "bulk" });
       done++;
     }
     touch(outMissingIds);
@@ -353,13 +415,19 @@ export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery
       status: d.status,
       checkIn: d.status === "present" ? d.checkIn : null,
       checkOut: d.status === "present" ? d.checkOut : null,
+      checkInSource: d.status === "present" ? d.checkInSource ?? "entered" : null,
       method: d.method,
       expectedVersion: d.baseVersion,
     }));
     startSaving(async () => {
-      const res = await saveAttendanceAction({ projectId: project.id, contractorId: view.contractorId, workDate: view.date, items });
+      const res = await saveAttendanceAction({
+        projectId: project.id, contractorId: view.contractorId, workDate: view.date, items, policyToken: view.policy?.token,
+      });
       if (!res.ok) {
-        if (res.code === "conflict") {
+        if (res.code === "stale_settings") {
+          // Drafts stay on this device; the reload brings the new settings.
+          toast.error(res.error, { duration: 15000, action: { label: "Reload", onClick: () => router.refresh() } });
+        } else if (res.code === "conflict") {
           toast.error(res.error, {
             duration: 15000,
             action: { label: "Reload", onClick: () => { commit({}); router.refresh(); } },
@@ -401,11 +469,16 @@ export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery
   };
 
   // ---- sheet wiring ----
-  const sheetWorker = sheet && sheet.kind !== "bulk-out" ? view.rows.find((r) => r.workerId === sheet.workerId) : null;
-  const sheetCurrent = sheet && sheet.kind !== "bulk-out" ? stateOf(sheet.workerId) : null;
-  const inQuickPicks = [-60, -30, 0, 30, 60, 90].map((d) => shiftTime(suggestedIn, d));
-  const outQuickPicks = (checkIn: string | null) =>
-    [240, 480, 510, 540, 570, 600].map((d) => shiftTime(checkIn ?? suggestedIn, d));
+  const sheetWorker = sheet && (sheet.kind === "in" || sheet.kind === "out") ? view.rows.find((r) => r.workerId === sheet.workerId) : null;
+  const sheetCurrent = sheet && (sheet.kind === "in" || sheet.kind === "out") ? stateOf(sheet.workerId) : null;
+  // Quick picks centre on the site's suggested IN or shift start, else on the current time.
+  const inAnchor = (nowMs: number) => suggestedIn ?? day.shiftStart ?? nowFor(nowMs);
+  const inQuickPicks = (nowMs: number) => [-60, -30, 0, 30, 60, 90].map((d) => shiftTime(inAnchor(nowMs), d));
+  const outQuickPicks = (checkIn: string | null, nowMs: number) => {
+    const fromIn = [240, 480, 510, 540, 570, 600].map((d) => shiftTime(checkIn ?? inAnchor(nowMs), d));
+    return day.shiftEnd ? [day.shiftEnd, ...fromIn.filter((t) => t !== day.shiftEnd)].slice(0, 6) : fromIn;
+  };
+  const earliestMissingIn = outMissingIds.map((id) => stateOf(id).checkIn).filter((t): t is string => !!t).sort()[0] ?? null;
 
   if (!project) {
     return <EmptyState icon={Lock} title="No project sites yet" description={view.readOnlyReason ?? "No project sites available."} />;
@@ -417,7 +490,7 @@ export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery
   const canGoForward = view.date < view.today;
 
   return (
-    <section aria-label={heading} className={cn("space-y-4", dirtyCount > 0 && "pb-24")}>
+    <section aria-label={heading} className={cn("space-y-4", dirtyCount > 0 && "pb-24")} data-testid="register" data-suggested-in={suggestedIn ?? ""}>
       {/* ---------- Header: date, project, contractor ---------- */}
       <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,22rem)] md:items-end md:gap-8">
         <div className="min-w-0">
@@ -542,10 +615,15 @@ export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery
               icon={<CheckCheck className="size-4.5" />}
               tone="present"
               title={`Mark all ${counts.pending} pending present`}
-              detail={`IN ${formatTime12(suggestedIn)} · pending workers are not counted until confirmed`}
+              detail={
+                suggestedIn
+                  ? `Suggested IN ${formatTime12(suggestedIn)} · pending workers are not counted until confirmed`
+                  : "Choose one IN time · pending workers are not counted until confirmed"
+              }
               onClick={() => {
                 setDialogCount(pendingIds.length);
-                setBulkConfirmOpen(true);
+                if (suggestedIn) setBulkConfirmOpen(true);
+                else setSheet({ kind: "bulk-in", nowMs: Date.now() });
               }}
               data-testid="bulk-present"
             />
@@ -726,14 +804,16 @@ export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery
           title="Check-in time"
           subject={sheetWorker.workerName}
           description={sheetCurrent.status === "pending" ? "Setting an IN time marks this worker present." : undefined}
-          initialTime={sheetCurrent.checkIn ?? suggestedIn}
-          quickPicks={inQuickPicks}
+          initialTime={sheetCurrent.checkIn ?? (isToday ? nowFor(sheet.nowMs) : inAnchor(sheet.nowMs))}
+          quickPicks={inQuickPicks(sheet.nowMs)}
           nowTime={isToday ? nowFor(sheet.nowMs) : null}
           confirmLabel="Set IN"
           validate={validateIn(sheet.workerId, sheet.nowMs)}
           onConfirm={(t) => {
             touch([sheet.workerId]);
-            commit(applyChange(draftsRef.current, sheet.workerId, { status: "present", checkIn: t, checkOut: sheetCurrent.checkOut, method: "individual" }));
+            // Picked in the sheet, so it was entered (even if it equals the suggestion).
+            const source: CheckInSource = t === sheetCurrent.checkIn && sheetCurrent.checkInSource ? sheetCurrent.checkInSource : "entered";
+            commit(applyChange(draftsRef.current, sheet.workerId, { status: "present", checkIn: t, checkOut: sheetCurrent.checkOut, checkInSource: source, method: "individual" }));
             setSheet(null);
           }}
         />
@@ -745,21 +825,29 @@ export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery
           title="Check-out time"
           subject={sheetWorker.workerName}
           description={sheetCurrent.checkIn ? `IN was ${formatTime12(sheetCurrent.checkIn)}` : undefined}
-          initialTime={sheetCurrent.checkOut ?? (isToday ? nowFor(sheet.nowMs) : shiftTime(sheetCurrent.checkIn ?? suggestedIn, 540))}
-          quickPicks={outQuickPicks(sheetCurrent.checkIn)}
+          initialTime={sheetCurrent.checkOut ?? (isToday ? nowFor(sheet.nowMs) : day.shiftEnd ?? shiftTime(sheetCurrent.checkIn ?? inAnchor(sheet.nowMs), 540))}
+          quickPicks={outQuickPicks(sheetCurrent.checkIn, sheet.nowMs)}
           nowTime={isToday ? nowFor(sheet.nowMs) : null}
           confirmLabel="Set OUT"
-          validate={validateOut(sheetCurrent.checkIn, sheet.nowMs)}
-          note={outNote(sheetCurrent.checkIn)}
+          validate={validateOut(sheet.workerId, sheet.nowMs)}
+          note={outNote(sheet.workerId)}
           onConfirm={(t) => {
             touch([sheet.workerId]);
-            commit(applyChange(draftsRef.current, sheet.workerId, { status: "present", checkIn: sheetCurrent.checkIn, checkOut: t, method: "individual" }));
+            commit(
+              applyChange(draftsRef.current, sheet.workerId, {
+                status: "present", checkIn: sheetCurrent.checkIn, checkOut: t, checkInSource: sheetCurrent.checkInSource, method: "individual",
+              }),
+            );
             setSheet(null);
           }}
           onClear={
             sheetCurrent.checkOut
               ? () => {
-                  commit(applyChange(draftsRef.current, sheet.workerId, { status: "present", checkIn: sheetCurrent.checkIn, checkOut: null, method: "individual" }));
+                  commit(
+                    applyChange(draftsRef.current, sheet.workerId, {
+                      status: "present", checkIn: sheetCurrent.checkIn, checkOut: null, checkInSource: sheetCurrent.checkInSource, method: "individual",
+                    }),
+                  );
                   setSheet(null);
                 }
               : undefined
@@ -773,12 +861,28 @@ export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery
           onOpenChange={(o) => !o && setSheet(null)}
           title={`Record OUT for ${outMissingIds.length} worker${outMissingIds.length === 1 ? "" : "s"}`}
           description="Applies to present workers with no OUT time yet. Logged as a bulk entry."
-          initialTime={isToday ? nowFor(sheet.nowMs) : shiftTime(suggestedIn, 540)}
-          quickPicks={outQuickPicks(suggestedIn)}
+          initialTime={isToday ? nowFor(sheet.nowMs) : day.shiftEnd ?? shiftTime(earliestMissingIn ?? inAnchor(sheet.nowMs), 540)}
+          quickPicks={outQuickPicks(earliestMissingIn, sheet.nowMs)}
           nowTime={isToday ? nowFor(sheet.nowMs) : null}
           confirmLabel="Set OUT"
-          validate={(t) => (outMissingIds.every((id) => validateOut(stateOf(id).checkIn, sheet.nowMs)(t)) ? "This time is not valid for any of these workers" : null)}
+          validate={(t) => (outMissingIds.every((id) => validateOut(id, sheet.nowMs)(t)) ? "This time is not valid for any of these workers" : null)}
           onConfirm={(t) => bulkOut(t, sheet.nowMs)}
+        />
+      )}
+      {sheet?.kind === "bulk-in" && (
+        <TimeSheet
+          open
+          onOpenChange={(o) => !o && setSheet(null)}
+          title={`IN time for ${pendingIds.length} pending worker${pendingIds.length === 1 ? "" : "s"}`}
+          description="Only if they are all on site. Logged as a bulk entry; you can still change anyone before saving."
+          initialTime={isToday ? nowFor(sheet.nowMs) : inAnchor(sheet.nowMs)}
+          quickPicks={inQuickPicks(sheet.nowMs)}
+          nowTime={isToday ? nowFor(sheet.nowMs) : null}
+          confirmLabel="Mark present"
+          validate={validateBulkIn(sheet.nowMs)}
+          onConfirm={(t) => {
+            if (bulkPresent(t, "entered", sheet.nowMs)) setSheet(null);
+          }}
         />
       )}
 
@@ -787,14 +891,23 @@ export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery
           <AlertDialogHeader>
             <AlertDialogTitle>Mark {dialogCount} workers present?</AlertDialogTitle>
             <AlertDialogDescription>
-              Everyone still pending gets IN {formatTime12(suggestedIn)}. Only do this if they are all on site. These entries are
-              recorded as <strong className="font-semibold text-foreground">bulk confirmed</strong> in the change log, and you can still
-              change anyone before saving.
+              Everyone still pending gets the site&rsquo;s suggested IN time, {suggestedIn ? formatTime12(suggestedIn) : "—"}. Only do this if
+              they are all on site. These entries are recorded as <strong className="font-semibold text-foreground">bulk confirmed</strong>{" "}
+              with the suggested time accepted, and you can still change anyone before saving.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={bulkConfirm} data-testid="bulk-present-confirm">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setBulkConfirmOpen(false);
+                setSheet({ kind: "bulk-in", nowMs: Date.now() });
+              }}
+            >
+              Choose another time
+            </Button>
+            <AlertDialogAction onClick={() => bulkConfirm(Date.now())} data-testid="bulk-present-confirm">
               Mark {dialogCount} present
             </AlertDialogAction>
           </AlertDialogFooter>

@@ -1,9 +1,11 @@
 import { conflict, invalid, notFound } from "@/lib/errors";
+import { resolvePolicy, type AttendancePolicyVersion } from "@/lib/domain/policy";
 import { addDays } from "@/lib/domain/time";
 import { assignmentCovers } from "@/lib/domain/register";
 import type { Actor, AttendanceRecord, AttendanceSnapshot, Contractor, PaymentRule, Profile, Project, Worker } from "@/lib/domain/types";
 import { createDemoState, type DemoState } from "./demo-seed";
 import type {
+  AttendancePolicyFields,
   AttendanceQuery,
   AttendanceWrite,
   AuditQuery,
@@ -15,7 +17,8 @@ import type {
 // In-memory store used only in demo mode. It mirrors the database constraints
 // (unique attendance per worker/project/date, non-overlapping assignments,
 // optimistic versions, immutable rule versions, append-only audit log) so the
-// demo behaves like production. Data lives in server memory and resets on restart.
+// demo behaves like production (including append-only attendance policy versions
+// and the timezone lock). Data lives in server memory and resets on restart.
 
 const clone = <T,>(v: T): T => structuredClone(v);
 
@@ -73,6 +76,15 @@ export class DemoStore implements DataStore {
   async listPaymentRules() {
     return clone(this.state.rules);
   }
+  async listAttendancePolicies() {
+    return clone(this.state.policies);
+  }
+  async getEffectivePolicy(projectId: string, date: string) {
+    return resolvePolicy(this.state.policies, projectId, date);
+  }
+  async listProjectsWithAttendance() {
+    return [...new Set(this.state.attendance.map((r) => r.projectId))];
+  }
   async listAuditLogs(q: AuditQuery) {
     return clone(
       this.state.audit
@@ -123,6 +135,9 @@ export class DemoStore implements DataStore {
   async updateProject(id: string, input: ProjectFields) {
     const p = this.state.projects.find((x) => x.id === id);
     if (!p) throw notFound("Project");
+    if (input.timezone !== p.timezone && this.state.attendance.some((r) => r.projectId === id)) {
+      throw invalid("The timezone cannot be changed after attendance has been recorded at this site");
+    }
     Object.assign(p, input, { updatedAt: this.now() });
   }
 
@@ -252,6 +267,15 @@ export class DemoStore implements DataStore {
     return clone(rule);
   }
 
+  // ---------- attendance policies (append-only versions) ----------
+
+  async createAttendancePolicy(input: AttendancePolicyFields, actor: Actor) {
+    const version = Math.max(0, ...this.state.policies.filter((v) => v.projectId === input.projectId).map((v) => v.version)) + 1;
+    const row: AttendancePolicyVersion = { ...clone(input), id: this.nextId("pol"), version, createdAt: this.now(), createdBy: actor.id };
+    this.state.policies.push(row);
+    return clone(row);
+  }
+
   // ---------- attendance (atomic batch) ----------
 
   async saveAttendance(projectId: string, workDate: string, items: AttendanceWrite[], actor: Actor) {
@@ -276,6 +300,7 @@ export class DemoStore implements DataStore {
       }
       if (item.status === "absent" && (item.checkInAt || item.checkOutAt)) throw invalid("Absent workers cannot have times");
       if (item.status === "present" && !item.checkInAt) throw invalid("Present workers need an IN time");
+      if (item.status !== "present" && item.checkInSource) throw invalid("Only present workers have an IN source");
       if (item.checkOutAt && (!item.checkInAt || item.checkOutAt <= item.checkInAt)) throw invalid("OUT must be after IN");
     }
 
@@ -283,9 +308,9 @@ export class DemoStore implements DataStore {
     const saved: AttendanceRecord[] = [];
     for (const item of items) {
       const rec = existing.get(item.workerId);
-      const newValues = { status: item.status, checkInAt: item.checkInAt, checkOutAt: item.checkOutAt };
+      const newValues = { status: item.status, checkInAt: item.checkInAt, checkOutAt: item.checkOutAt, checkInSource: item.checkInSource };
       if (rec) {
-        const oldValues = { status: rec.status, checkInAt: rec.checkInAt, checkOutAt: rec.checkOutAt };
+        const oldValues = { status: rec.status, checkInAt: rec.checkInAt, checkOutAt: rec.checkOutAt, checkInSource: rec.checkInSource };
         Object.assign(rec, newValues, { method: item.method, version: rec.version + 1, updatedAt: at, updatedBy: actor.id });
         this.audit(rec, "update", item.method, actor, oldValues, at);
         saved.push(clone(rec));
@@ -306,7 +331,7 @@ export class DemoStore implements DataStore {
     this.state.audit.push({
       id: String(++this.state.seq.audit), attendanceId: rec.id, workerId: rec.workerId, projectId: rec.projectId,
       contractorId: rec.contractorId, workDate: rec.workDate, action, method, changedBy: actor.id, changedByRole: actor.role,
-      changedAt: at, oldValues, newValues: { status: rec.status, checkInAt: rec.checkInAt, checkOutAt: rec.checkOutAt },
+      changedAt: at, oldValues, newValues: { status: rec.status, checkInAt: rec.checkInAt, checkOutAt: rec.checkOutAt, checkInSource: rec.checkInSource },
     });
   }
 }

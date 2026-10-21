@@ -1,9 +1,11 @@
 import { calculateDay, round2, ruleForDate, type DayCalculation } from "./calc";
+import { dayLabels, NO_LABELS, operatorEditClosesAt, resolvePolicy, type AttendancePolicyVersion, type DayLabels, type EffectivePolicy } from "./policy";
 import { assignmentCovers } from "./register";
 import { addDays, instantToLocal } from "./time";
 import type {
   AttendanceRecord,
   AttendanceStatus,
+  CheckInSource,
   Contractor,
   PaymentRule,
   Project,
@@ -28,14 +30,21 @@ export interface ReportRow {
   checkIn: string | null;
   checkOut: string | null;
   checkOutNextDay: boolean;
+  /** how IN was recorded (null for older records) */
+  checkInSource: CheckInSource | null;
   calc: DayCalculation;
+  /** attendance-policy labels: late, half day, overtime, absent – not marked. Never affect pay. */
+  labels: DayLabels;
 }
 
 export interface ReportTotals {
   workers: number;
   presentDays: number;
   absentDays: number;
+  /** nothing recorded yet (excludes days shown as "Absent – not marked") */
   pendingDays: number;
+  /** auto-absent (report-only): nothing recorded and the operator window has closed */
+  notMarkedAbsentDays: number;
   /** present but OUT not recorded — excluded from hours and payable */
   incompleteDays: number;
   /** sum of per-row rounded net hours (complete records only) */
@@ -83,6 +92,9 @@ export interface ReportInput {
   rules: PaymentRule[];
   /** Today's date per project timezone. Pending is only counted up to today. */
   todayByProject: Record<string, string>;
+  /** Attendance policy versions; when given (with `now`), rows carry labels. */
+  policies?: AttendancePolicyVersion[];
+  now?: Date;
 }
 
 function emptyTotals(): ReportTotals {
@@ -91,6 +103,7 @@ function emptyTotals(): ReportTotals {
     presentDays: 0,
     absentDays: 0,
     pendingDays: 0,
+    notMarkedAbsentDays: 0,
     incompleteDays: 0,
     netHours: 0,
     payableDays: 0,
@@ -105,6 +118,7 @@ function accumulate(totals: ReportTotals, row: ReportRow) {
   const c = row.calc;
   if (row.status === "present") totals.presentDays++;
   else if (row.status === "absent") totals.absentDays++;
+  else if (row.labels.notMarkedAbsent) totals.notMarkedAbsentDays++;
   else totals.pendingDays++;
   if (c.incomplete) totals.incompleteDays++;
   if (c.complete && c.netHours !== null) totals.netHours += c.netHours;
@@ -141,6 +155,22 @@ export function buildReport(input: ReportInput): Report {
   const rows: ReportRow[] = [];
   const recorded = new Set<string>();
 
+  // Labels: the work-date policy decides what applies; the window that closes a day
+  // for operators comes from the policy in force on the site's today.
+  const policyCache = new Map<string, EffectivePolicy>();
+  const policyFor = (projectId: string, date: string) => {
+    const key = `${projectId}:${date}`;
+    let p = policyCache.get(key);
+    if (!p) policyCache.set(key, (p = resolvePolicy(input.policies ?? [], projectId, date)));
+    return p;
+  };
+  const labelsFor = (project: Project, workDate: string, record: AttendanceRecord | null): DayLabels => {
+    if (!input.policies || !input.now) return NO_LABELS;
+    const today = input.todayByProject[project.id] ?? workDate;
+    const closesAt = operatorEditClosesAt(policyFor(project.id, today), workDate, project.timezone);
+    return dayLabels(policyFor(project.id, workDate), record, workDate, project.timezone, input.now.getTime() >= closesAt.getTime());
+  };
+
   const makeRow = (
     workerId: string,
     projectId: string,
@@ -170,7 +200,9 @@ export function buildReport(input: ReportInput): Report {
       checkIn: record?.status === "present" ? inLocal?.time ?? null : null,
       checkOut: record?.status === "present" ? outLocal?.time ?? null : null,
       checkOutNextDay: !!(outLocal && outLocal.date > workDate),
+      checkInSource: record?.status === "present" ? record.checkInSource : null,
       calc,
+      labels: labelsFor(project, workDate, record),
     };
   };
 

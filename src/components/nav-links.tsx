@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Building2, ClipboardCheck, History, LayoutGrid, MapPin, Users } from "lucide-react";
+import { Building2, ClipboardCheck, History, LayoutGrid, MapPin, Settings, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const NAV = {
@@ -13,6 +13,7 @@ const NAV = {
   contractors: { href: "/admin/contractors", label: "Contractors", icon: Building2, match: (p: string) => p.startsWith("/admin/contractors") },
   projects: { href: "/admin/projects", label: "Projects", icon: MapPin, match: (p: string) => p.startsWith("/admin/projects") },
   workers: { href: "/admin/workers", label: "Workers", icon: Users, match: (p: string) => p.startsWith("/admin/workers") },
+  settings: { href: "/admin/settings", label: "Settings", icon: Settings, match: (p: string) => p.startsWith("/admin/settings") },
 } as const;
 
 export type NavKey = keyof typeof NAV;

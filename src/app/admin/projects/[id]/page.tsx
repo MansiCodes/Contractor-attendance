@@ -10,6 +10,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { assignmentCovers } from "@/lib/domain/register";
 import { formatDateShort } from "@/lib/domain/time";
 import { adminDirectory } from "@/lib/server/services/admin";
+import { lockedTimezones } from "@/lib/server/services/settings";
 import { deploymentOptions, workerSummaries } from "@/lib/server/services/directory";
 import { requirePageContext } from "@/lib/server/session";
 
@@ -20,7 +21,7 @@ type Params = Promise<{ id: string }>;
 export default async function ProjectPage({ params }: { params: Params }) {
   const ctx = await requirePageContext("admin");
   const { id } = await params;
-  const dir = await adminDirectory(ctx);
+  const [dir, locked] = await Promise.all([adminDirectory(ctx), lockedTimezones(ctx)]);
   const project = dir.projects.find((p) => p.id === id);
   if (!project) notFound();
   const options = deploymentOptions(dir);
@@ -122,7 +123,7 @@ export default async function ProjectPage({ params }: { params: Params }) {
       </Section>
 
       <Section title="Site settings">
-        <ProjectSettingsForm project={project} />
+        <ProjectSettingsForm project={project} timezoneLocked={locked.includes(project.id)} />
       </Section>
     </div>
   );

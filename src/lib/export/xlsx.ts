@@ -50,7 +50,7 @@ export async function buildAttendanceWorkbook(report: Report, meta: ExportMeta):
   summary.getCell("A3").value = `Project: ${meta.projectLabel} · Contractor: ${meta.contractorLabel}`;
   summary.getCell("A4").value = `Generated ${meta.generatedAt} by ${meta.generatedBy}`;
   summary.getCell("A5").value =
-    "Estimated payables only (not disbursed amounts). Pending entries and entries without an OUT time are excluded from hours and payables.";
+    "Estimated payables only (not disbursed amounts). Pending entries and entries without an OUT time are excluded from hours and payables. Late, half-day and policy overtime labels never change payables.";
   summary.getCell("A5").font = { italic: true, color: { argb: "FF555555" } };
 
   summary.columns = [
@@ -66,11 +66,12 @@ export async function buildAttendanceWorkbook(report: Report, meta: ExportMeta):
     { key: "phours", width: 12 },
     { key: "amount", width: 18 },
     { key: "status", width: 26 },
+    { key: "notMarked", width: 12 },
   ];
   const header = summary.getRow(7);
   header.values = [
     "Contractor", "Project", "Workers", "Present days", "Absent days", "Pending", "OUT missing",
-    "Net hours", "Payable days", "Payable hours", "Estimated payable (₹)", "Rate status",
+    "Net hours", "Payable days", "Payable hours", "Estimated payable (₹)", "Rate status", "Absent – not marked",
   ];
   styleHeader(header);
 
@@ -90,6 +91,7 @@ export async function buildAttendanceWorkbook(report: Report, meta: ExportMeta):
       phours: t.payableHours,
       amount: priced ? t.amount : null,
       status: !g.ruleConfigured || (!priced && t.unconfiguredDays > 0) ? "Not configured" : t.unconfiguredDays > 0 ? `${t.unconfiguredDays} day(s) not configured` : "Configured",
+      notMarked: t.notMarkedAbsentDays,
     });
     row.getCell("hours").numFmt = NUM2;
     row.getCell("amount").numFmt = INR_FMT;
@@ -118,6 +120,7 @@ export async function buildAttendanceWorkbook(report: Report, meta: ExportMeta):
     phours: t.payableHours,
     amount: t.amount,
     status: t.unconfiguredDays > 0 ? `${t.unconfiguredDays} day(s) not configured` : "",
+    notMarked: t.notMarkedAbsentDays,
   });
   grand.font = { bold: true };
   grand.getCell("hours").numFmt = NUM2;
@@ -144,13 +147,19 @@ export async function buildAttendanceWorkbook(report: Report, meta: ExportMeta):
     { header: "Rule version", key: "rule", width: 8 },
     { header: "Estimated amount (₹)", key: "amount", width: 14 },
     { header: "Note", key: "note", width: 30 },
+    { header: "IN recorded as", key: "source", width: 14 },
+    { header: "Late (min)", key: "late", width: 9 },
+    { header: "Half day (label)", key: "halfDay", width: 9 },
+    { header: "Overtime beyond policy (min)", key: "otLabel", width: 11 },
   ];
   styleHeader(sheet.getRow(1));
 
   for (const r of report.rows) {
     const c = r.calc;
     const note =
-      r.status === "pending"
+      r.labels.notMarkedAbsent
+        ? "Absent – not marked (auto-absent, report only)"
+        : r.status === "pending"
         ? "Pending confirmation — not counted"
         : c.incomplete
           ? "OUT not recorded — hours incomplete"
@@ -163,7 +172,7 @@ export async function buildAttendanceWorkbook(report: Report, meta: ExportMeta):
       name: r.workerName,
       contractor: r.contractorName,
       project: r.projectName,
-      status: r.status === "present" ? "Present" : r.status === "absent" ? "Absent" : "Pending",
+      status: r.status === "present" ? "Present" : r.status === "absent" ? "Absent" : r.labels.notMarkedAbsent ? "Absent (not marked)" : "Pending",
       in: excelTime(r.checkIn),
       out: excelTime(r.checkOut),
       nextDay: r.checkOutNextDay ? "Yes" : null,
@@ -176,6 +185,10 @@ export async function buildAttendanceWorkbook(report: Report, meta: ExportMeta):
       rule: c.ruleVersion,
       amount: c.amountState === "ok" ? c.amount : null,
       note,
+      source: r.checkInSource === "suggested" ? "Suggested time" : r.checkInSource === "entered" ? "Entered" : null,
+      late: r.labels.lateMinutes,
+      halfDay: r.labels.halfDay ? "Yes" : null,
+      otLabel: r.labels.overtimeMinutes,
     });
     row.getCell("date").numFmt = DATE_FMT;
     row.getCell("in").numFmt = TIME_FMT;

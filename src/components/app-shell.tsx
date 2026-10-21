@@ -21,7 +21,7 @@ export function DemoBadge({ className = "" }: { className?: string }) {
 export function AppShell({ actor, nav, children }: { actor: Actor; nav: "operator" | "admin"; children: React.ReactNode }) {
   const demo = getAppMode() === "demo";
   const items: NavKey[] =
-    nav === "admin" ? ["overview", "attendance-admin", "contractors", "projects", "workers"] : ["attendance", "history"];
+    nav === "admin" ? ["overview", "attendance-admin", "contractors", "projects", "workers", "settings"] : ["attendance", "history"];
   return (
     <div className="min-h-dvh [--bottom-nav-h:calc(3.5rem+env(safe-area-inset-bottom))] [--header-h:0px] md:[--bottom-nav-h:0px] md:[--header-h:3.5rem]">
       <header className="z-30 border-b border-border/80 bg-background/85 backdrop-blur-md md:sticky md:top-0">

@@ -14,6 +14,17 @@ export function isValidTime(value: string): boolean {
   return TIME_RE.test(value);
 }
 
+/** True for an IANA timezone name the runtime recognises, e.g. "Asia/Kolkata". */
+export function isValidTimezone(value: string): boolean {
+  if (!value || value.length > 64) return false;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function isValidDate(value: string): boolean {
   const m = DATE_RE.exec(value);
   if (!m) return false;
@@ -73,6 +84,51 @@ export function localToInstant(date: string, time: string, timezone: string): Da
   const [y, mo, d] = parseDate(date);
   const [h, mi] = parseTime(time);
   return new Date(new TZDate(y, mo - 1, d, h, mi, 0, timezone).getTime());
+}
+
+const DAY_MS = 86_400_000;
+const offsetMs = (ms: number, timezone: string) => -new TZDate(ms, timezone).getTimezoneOffset() * 60000;
+const wallClock = (ms: number, timezone: string) => format(new TZDate(ms, timezone), "yyyy-MM-dd HH:mm");
+
+/**
+ * Every instant whose wall-clock reading in `timezone` is `date time`: none in a
+ * spring-forward gap, two in a fall-back fold, otherwise one. Ascending.
+ */
+function localCandidates(date: string, time: string, timezone: string): number[] {
+  const [y, mo, d] = parseDate(date);
+  const [h, mi] = parseTime(time);
+  const naive = Date.UTC(y, mo - 1, d, h, mi);
+  const want = `${date} ${time}`;
+  const found = new Set<number>();
+  for (const probe of [naive - DAY_MS, naive, naive + DAY_MS]) {
+    const ms = naive - offsetMs(probe, timezone);
+    if (wallClock(ms, timezone) === want) found.add(ms);
+  }
+  return [...found].sort((a, b) => a - b);
+}
+
+export type LocalInstant = { ok: true; instant: Date } | { ok: false; reason: "gap" | "fold" };
+
+/** Like localToInstant, but refuses times that do not exist or occur twice on that date (DST). */
+export function localToInstantStrict(date: string, time: string, timezone: string): LocalInstant {
+  const c = localCandidates(date, time, timezone);
+  if (c.length === 1) return { ok: true, instant: new Date(c[0]) };
+  return { ok: false, reason: c.length === 0 ? "gap" : "fold" };
+}
+
+/**
+ * Local date + time to an instant exactly as PostgreSQL's `timestamp AT TIME ZONE`
+ * does: in a gap the offset before the transition applies, in a fold the one after
+ * it (the later instant). Used for policy times (cutoff, shift start) so the app and
+ * the database agree on every date.
+ */
+export function localToInstantPg(date: string, time: string, timezone: string): Date {
+  const c = localCandidates(date, time, timezone);
+  if (c.length > 0) return new Date(c[c.length - 1]);
+  const [y, mo, d] = parseDate(date);
+  const [h, mi] = parseTime(time);
+  const naive = Date.UTC(y, mo - 1, d, h, mi);
+  return new Date(naive - offsetMs(naive - DAY_MS, timezone));
 }
 
 /** Converts an absolute instant to local date and time strings in `timezone`. */

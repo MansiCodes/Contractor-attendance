@@ -1,11 +1,12 @@
 "use client";
 
 import { useOptimistic, useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { Loader2, Plus, X } from "lucide-react";
+import { ArrowRight, Loader2, Lock, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -31,19 +32,18 @@ import {
 } from "@/lib/server/actions/admin";
 import { operatorCreate, projectInput } from "@/lib/domain/schemas";
 import type { Project } from "@/lib/domain/types";
-import { Field, ToggleRow, selectClass, useServerAction } from "./form-bits";
+import { Field, TimezoneOptions, ToggleRow, selectClass, useServerAction } from "./form-bits";
 
 type ProjectValues = z.input<typeof projectInput>;
 
-const TIMEZONES = ["Asia/Kolkata"];
-
-export function AddProjectDialog() {
+/** `defaultTimezone` comes from the company attendance settings. */
+export function AddProjectDialog({ defaultTimezone }: { defaultTimezone: string }) {
   const [open, setOpen] = useState(false);
   const router = useRouter();
   const { pending, run } = useServerAction();
   const form = useForm<ProjectValues>({
     resolver: zodResolver(projectInput),
-    defaultValues: { name: "", location: "", isActive: true, timezone: "Asia/Kolkata", defaultCheckIn: "09:00", allowOvernight: false, operatorBackdateDays: 0 },
+    defaultValues: { name: "", location: "", isActive: true, timezone: defaultTimezone },
   });
   const submit = form.handleSubmit((v) =>
     run(() => createProjectAction(v), {
@@ -74,6 +74,11 @@ export function AddProjectDialog() {
           <Field label="Location" htmlFor="p-loc" hint="City, State" error={form.formState.errors.location?.message}>
             <Input id="p-loc" {...form.register("location")} />
           </Field>
+          <Field label="Timezone" htmlFor="p-tz" hint="Attendance dates and times use this zone. It is locked once attendance is recorded." error={form.formState.errors.timezone?.message}>
+            <select id="p-tz" className={selectClass} {...form.register("timezone")}>
+              <TimezoneOptions current={defaultTimezone} />
+            </select>
+          </Field>
           <DialogFooter>
             <Button type="submit" disabled={pending}>
               {pending && <Loader2 className="animate-spin" />} Create project
@@ -85,22 +90,15 @@ export function AddProjectDialog() {
   );
 }
 
-export function ProjectSettingsForm({ project }: { project: Project }) {
+/** Name, location, timezone and status. Attendance rules for the site live in Settings → Attendance. */
+export function ProjectSettingsForm({ project, timezoneLocked }: { project: Project; timezoneLocked: boolean }) {
   const { pending, run } = useServerAction();
   const form = useForm<ProjectValues>({
     resolver: zodResolver(projectInput),
-    defaultValues: {
-      name: project.name,
-      location: project.location,
-      isActive: project.isActive,
-      timezone: project.timezone,
-      defaultCheckIn: project.defaultCheckIn,
-      allowOvernight: project.allowOvernight,
-      operatorBackdateDays: project.operatorBackdateDays,
-    },
+    defaultValues: { name: project.name, location: project.location, isActive: project.isActive, timezone: project.timezone },
   });
   // eslint-disable-next-line react-hooks/incompatible-library -- RHF watch is fine here
-  const [isActive, allowOvernight] = form.watch(["isActive", "allowOvernight"]);
+  const isActive = form.watch("isActive");
   const e = form.formState.errors;
   const submit = form.handleSubmit((v) => run(() => updateProjectAction(project.id, v), { success: "Project settings saved" }));
   return (
@@ -112,31 +110,37 @@ export function ProjectSettingsForm({ project }: { project: Project }) {
         <Field label="Location" htmlFor="ps-loc" error={e.location?.message}>
           <Input id="ps-loc" {...form.register("location")} />
         </Field>
-        <Field label="Suggested IN time" htmlFor="ps-in" hint="Shown for pending workers. Not counted until confirmed." error={e.defaultCheckIn?.message}>
-          <Input id="ps-in" type="time" {...form.register("defaultCheckIn")} />
+        <Field
+          label="Timezone"
+          htmlFor="ps-tz"
+          hint={timezoneLocked ? "Locked: attendance has already been recorded at this site." : "Attendance dates and times use this zone. It locks once attendance is recorded."}
+          error={e.timezone?.message}
+        >
+          {timezoneLocked ? (
+            // Not registered: the saved value (from defaultValues) is submitted unchanged.
+            <div className="relative">
+              <select id="ps-tz" className={selectClass} disabled value={project.timezone} onChange={() => {}}>
+                <TimezoneOptions current={project.timezone} />
+              </select>
+              <Lock aria-hidden className="pointer-events-none absolute top-1/2 right-9 size-4 -translate-y-1/2 text-muted-foreground" />
+            </div>
+          ) : (
+            <select id="ps-tz" className={selectClass} {...form.register("timezone")}>
+              <TimezoneOptions current={project.timezone} />
+            </select>
+          )}
         </Field>
-        <Field label="Timezone" htmlFor="ps-tz">
-          <select id="ps-tz" className={selectClass} {...form.register("timezone")}>
-            {TIMEZONES.map((t) => (
-              <option key={t} value={t}>{t === "Asia/Kolkata" ? "India (IST, Asia/Kolkata)" : t}</option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Operators may edit past days" htmlFor="ps-back" hint="0 = today only. Admins can always correct." error={e.operatorBackdateDays?.message}>
-          <select id="ps-back" className={selectClass} {...form.register("operatorBackdateDays")}>
-            {[0, 1, 2, 3, 7].map((n) => (
-              <option key={n} value={n}>{n === 0 ? "Today only" : `Up to ${n} day${n > 1 ? "s" : ""} back`}</option>
-            ))}
-          </select>
-        </Field>
+        <div className="space-y-1.5">
+          <span className="text-sm font-medium">Attendance rules</span>
+          <Link
+            href={`/admin/settings?site=${project.id}`}
+            className="flex h-11 items-center justify-between rounded-lg border border-input bg-card px-3 text-sm font-medium transition-colors hover:bg-muted"
+          >
+            Suggested IN, shifts, edit window <ArrowRight className="size-4 text-muted-foreground" />
+          </Link>
+        </div>
       </div>
       <div className="grid gap-2 sm:grid-cols-2">
-        <ToggleRow
-          label="Allow overnight shifts"
-          description="An OUT time earlier than IN is treated as the next day."
-          checked={!!allowOvernight}
-          onCheckedChange={(v) => form.setValue("allowOvernight", v, { shouldDirty: true })}
-        />
         <ToggleRow
           label="Site active"
           description="Inactive sites are hidden from operators."

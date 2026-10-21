@@ -2,9 +2,9 @@ import { invalid } from "@/lib/errors";
 import { assignmentCovers } from "@/lib/domain/register";
 import { buildReport, payableLabel, type Report } from "@/lib/domain/report";
 import { reportFilter } from "@/lib/domain/schemas";
-import { DEFAULT_TIMEZONE, addDays, monthRange, todayIn } from "@/lib/domain/time";
+import { addDays, monthRange, todayIn } from "@/lib/domain/time";
 import type { AuditLog } from "@/lib/domain/types";
-import { assertAdmin, type ServiceContext } from "./context";
+import { assertAdmin, headOfficeToday, type ServiceContext } from "./context";
 
 const MAX_RANGE_DAYS = 366;
 
@@ -15,7 +15,7 @@ export async function getReport(ctx: ServiceContext, raw: unknown): Promise<Repo
   if (f.from > f.to) throw invalid("'From' date must be before 'To' date");
   if (addDays(f.from, MAX_RANGE_DAYS) < f.to) throw invalid("Please choose a range of one year or less");
 
-  const [projects, contractors, workers, assignments, records, rules] = await Promise.all([
+  const [projects, contractors, workers, assignments, records, rules, policies] = await Promise.all([
     ctx.store.listProjects(),
     ctx.store.listContractors(),
     ctx.store.listWorkers(),
@@ -27,6 +27,7 @@ export async function getReport(ctx: ServiceContext, raw: unknown): Promise<Repo
       to: f.to,
     }),
     ctx.store.listPaymentRules(),
+    ctx.store.listAttendancePolicies(),
   ]);
   return buildReport({
     from: f.from,
@@ -40,6 +41,8 @@ export async function getReport(ctx: ServiceContext, raw: unknown): Promise<Repo
     records,
     rules,
     todayByProject: Object.fromEntries(projects.map((p) => [p.id, todayIn(p.timezone, ctx.now)])),
+    policies,
+    now: ctx.now,
   });
 }
 
@@ -78,7 +81,7 @@ export interface OverviewData {
 
 export async function getOverview(ctx: ServiceContext, monthOf?: string | null): Promise<OverviewData> {
   assertAdmin(ctx);
-  const today = todayIn(DEFAULT_TIMEZONE, ctx.now);
+  const today = await headOfficeToday(ctx);
   const month = monthRange(monthOf && monthOf <= today ? monthOf : today);
   const [projects, contractors, workers, assignments, cpas, records, rules] = await Promise.all([
     ctx.store.listProjects(),

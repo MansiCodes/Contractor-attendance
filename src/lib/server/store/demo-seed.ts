@@ -1,3 +1,4 @@
+import { FALLBACK_POLICY, POLICY_EPOCH, POLICY_FIELDS, type AttendancePolicyVersion, type PolicyField, type PolicyRowValues } from "@/lib/domain/policy";
 import { addDays, dayOfWeek, DEFAULT_TIMEZONE, localToInstant, nowTimeIn, todayIn } from "@/lib/domain/time";
 import type {
   AttendanceRecord,
@@ -27,6 +28,7 @@ export interface DemoState {
   operatorAccess: OperatorAccess[];
   attendance: AttendanceRecord[];
   rules: PaymentRule[];
+  policies: AttendancePolicyVersion[];
   audit: AuditLog[];
   seq: { worker: number; audit: number; id: number };
 }
@@ -86,17 +88,39 @@ export function createDemoState(now: Date = new Date()): DemoState {
     contractor("c4", "Kalinga Workforce (Demo)", "Bhubaneswar, Odisha"),
   ];
 
-  const project = (id: string, name: string, location: string, extra: Partial<Project> = {}): Project => ({
-    id, name, location, isActive: true, timezone: tz, defaultCheckIn: "09:00", allowOvernight: false,
-    operatorBackdateDays: 0, createdAt, updatedAt: createdAt, ...extra,
+  const project = (id: string, name: string, location: string): Project => ({
+    id, name, location, isActive: true, timezone: tz, createdAt, updatedAt: createdAt,
   });
   const projects = [
-    project("p1", "Railway Signalling Installation (Demo)", "Jaipur, Rajasthan", { operatorBackdateDays: 1 }),
+    project("p1", "Railway Signalling Installation (Demo)", "Jaipur, Rajasthan"),
     project("p2", "District Hospital Fire Safety Retrofit (Demo)", "Pune, Maharashtra"),
     project("p3", "Smart Street Lighting Works (Demo)", "Lucknow, Uttar Pradesh"),
     project("p4", "Water Treatment Plant Fire Systems (Demo)", "Guwahati, Assam"),
-    project("p5", "Metro Depot Fire Protection (Demo)", "Bhubaneswar, Odisha", { allowOvernight: true }),
+    project("p5", "Metro Depot Fire Protection (Demo)", "Bhubaneswar, Odisha"),
   ];
+
+  // Attendance policies: the real company fallback, plus illustrative site settings.
+  // Guwahati (p4) keeps the company defaults, so it shows the "no suggested time" flow.
+  const blank = Object.fromEntries(POLICY_FIELDS.map((f) => [f, null])) as Record<PolicyField, null>;
+  const sitePolicy = (id: string, projectId: string, values: Partial<PolicyRowValues>): AttendancePolicyVersion => ({
+    ...blank, ...values, id, projectId, version: 1, effectiveFrom: POLICY_EPOCH, overridden: Object.keys(values) as PolicyField[],
+    defaultTimezone: null, notes: "Illustrative demo settings", createdAt, createdBy: DEMO_USERS.admin,
+  });
+  const policies: AttendancePolicyVersion[] = [
+    {
+      ...FALLBACK_POLICY, id: "pol1", projectId: null, version: 1, effectiveFrom: POLICY_EPOCH, overridden: [...POLICY_FIELDS],
+      defaultTimezone: tz, notes: "Initial company defaults", createdAt, createdBy: null,
+    },
+    sitePolicy("pol2", "p1", {
+      suggestedCheckIn: "09:00", shiftStart: "09:00", shiftEnd: "17:30", lateGraceMin: 15,
+      halfDayBelowHours: 4, overtimeAfterHours: 9, overtimeMinMinutes: 30, operatorBackdateDays: 1,
+    }),
+    sitePolicy("pol3", "p2", { suggestedCheckIn: "09:00" }),
+    sitePolicy("pol4", "p3", { suggestedCheckIn: "09:00" }),
+    // Overnight site: operators also get the next day, so they can record OUT after midnight.
+    sitePolicy("pol5", "p5", { suggestedCheckIn: "09:00", allowOvernight: true, operatorBackdateDays: 1 }),
+  ];
+  const suggestionFor: Record<string, string | null> = { p1: "09:00", p2: "09:00", p3: "09:00", p4: null, p5: "09:00" };
 
   const deployments: [string, string, number][] = [
     ["c1", "p1", 9], ["c1", "p3", 5],
@@ -176,15 +200,17 @@ export function createDemoState(now: Date = new Date()): DemoState {
     const checkInAt = inT ? iso(localToInstant(workDate, inT, tz)) : null;
     const checkOutAt = outT ? iso(localToInstant(outNextDay ? addDays(workDate, 1) : workDate, outT, tz)) : null;
     const stamp = checkOutAt ?? checkInAt ?? iso(localToInstant(workDate, "10:00", tz));
+    // A bulk confirmation at the site's suggested time accepted the suggestion; anything else was entered.
+    const checkInSource = status !== "present" ? null : method === "bulk" && inT === suggestionFor[projectId] ? "suggested" : "entered";
     const rec: AttendanceRecord = {
-      id: `a${attendance.length + 1}`, workerId, projectId, contractorId, workDate, status, checkInAt, checkOutAt,
+      id: `a${attendance.length + 1}`, workerId, projectId, contractorId, workDate, status, checkInAt, checkOutAt, checkInSource,
       method, version: 1, createdAt: stamp, updatedAt: stamp, createdBy: by, updatedBy: by,
     };
     attendance.push(rec);
     audit.push({
       id: String(++auditSeq), attendanceId: rec.id, workerId, projectId, contractorId, workDate, action: "create", method,
       changedBy: by, changedByRole: "operator", changedAt: stamp, oldValues: null,
-      newValues: { status, checkInAt, checkOutAt },
+      newValues: { status, checkInAt, checkOutAt, checkInSource },
     });
   };
 
@@ -229,6 +255,6 @@ export function createDemoState(now: Date = new Date()): DemoState {
 
   return {
     profiles, contractors, photos: {}, projects, contractorProjects, workers, assignments, operatorAccess,
-    attendance, rules, audit, seq: { worker: workerSeq, audit: auditSeq, id: 1000 },
+    attendance, rules, policies, audit, seq: { worker: workerSeq, audit: auditSeq, id: 1000 },
   };
 }

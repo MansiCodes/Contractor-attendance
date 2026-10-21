@@ -83,8 +83,18 @@ describe("Supabase error and row mapping", () => {
     });
     expect(rec.checkInAt).toBe("2026-10-20T03:30:00.000Z");
     expect(rec.version).toBe(3);
+    expect(rec.checkInSource).toBeNull(); // older rows have no source
     const project = map.project({ id: "p", name: "n", location: "l", is_active: true, timezone: "Asia/Kolkata", default_check_in: "09:00:00", allow_overnight: false, operator_backdate_days: 1, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" });
-    expect(project.defaultCheckIn).toBe("09:00");
+    expect(project).not.toHaveProperty("defaultCheckIn"); // deprecated column, no longer read
+    const site = map.policyRow({ id: "v", project_id: "p", version: 2, effective_from: "2026-01-01", overridden: ["suggested_check_in", "operator_backdate_days"], suggested_check_in: null, operator_backdate_days: 2, half_day_below_hours: null, default_timezone: null, notes: null, created_at: "2026-01-01T00:00:00Z", created_by: "u" });
+    expect(site).toMatchObject({ projectId: "p", overridden: ["suggestedCheckIn", "operatorBackdateDays"], suggestedCheckIn: null, operatorBackdateDays: 2 });
+    expect(map.policyFields({ ...site, defaultTimezone: null })).toMatchObject({ overridden: ["suggested_check_in", "operator_backdate_days"], operator_backdate_days: 2 });
+    const company = map.policyRow({ id: "c", project_id: null, version: 1, effective_from: "1900-01-01", overridden: [], suggested_check_in: "08:30:00", in_future_tolerance_min: 60, default_timezone: "Asia/Kolkata", created_at: "2026-01-01T00:00:00Z" });
+    expect(company.overridden).toHaveLength(13);
+    expect(company.suggestedCheckIn).toBe("08:30");
+    expect(map.effectivePolicy({ suggested_check_in: null, allow_overnight: true, in_future_tolerance_min: 15, half_day_below_hours: "4.50", company_policy_id: "c", site_policy_id: null })).toMatchObject({
+      suggestedCheckIn: null, allowOvernight: true, inFutureToleranceMin: 15, halfDayBelowHours: 4.5, companyPolicyId: "c", sitePolicyId: null,
+    });
     const rule = map.paymentRule({ id: "r", contractor_id: "c", version: 1, effective_from: "2026-01-01", rate_type: "per_day", day_rate: "650.00", hour_rate: null, full_day_hours: "8.00", half_day_hours: null, overtime_enabled: false, overtime_after_hours: null, overtime_hour_rate: null, unpaid_break_minutes: 30, notes: null, created_at: "2026-01-01T00:00:00Z", created_by: null });
     expect(rule.dayRate).toBe(650);
     expect(rule.fullDayHours).toBe(8);
@@ -92,5 +102,8 @@ describe("Supabase error and row mapping", () => {
     expect(log.id).toBe("7");
     expect(log.oldValues?.checkInAt).toBe("2026-10-20T03:30:00.000Z");
     expect(log.newValues.status).toBe("absent");
+    expect(log.oldValues).not.toHaveProperty("checkInSource"); // written before sources were tracked
+    const newer = map.auditLog({ id: 8, attendance_id: "a", worker_id: "w", project_id: "p", contractor_id: "c", work_date: "2026-10-20", action: "create", method: "bulk", changed_by: "u", changed_by_role: "operator", changed_at: "2026-10-20T04:00:00+00:00", old_values: null, new_values: { status: "present", check_in_at: "2026-10-20T03:30:00+00:00", check_out_at: null, check_in_source: "suggested" } });
+    expect(newer.newValues.checkInSource).toBe("suggested");
   });
 });

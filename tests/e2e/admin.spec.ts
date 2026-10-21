@@ -129,3 +129,51 @@ test("admin adds an operator, grants one site, and the operator sees only that s
   // Auto-waiting: the register streams in after its loading skeleton.
   await expect(page.getByTestId("project-select").locator("option")).toHaveText(["Water Treatment Plant Fire Systems (Demo) — Guwahati, Assam"]);
 });
+
+test("company defaults and site overrides drive the register", async ({ page }) => {
+  await loginAdmin(page);
+  await page.getByRole("link", { name: "Settings" }).first().click();
+  await page.waitForURL("**/admin/settings");
+  await expect(page.getByTestId("company-suggestedCheckIn")).toHaveText("None (operators enter the time)");
+
+  // Company default: a suggested IN for every site that does not override it (Guwahati, p4).
+  await page.getByTestId("edit-company").click();
+  await page.locator("#pol-suggestedCheckIn").fill("08:30");
+  await page.getByTestId("policy-save").click();
+  await expect(page.getByText(/Saved as version 2/)).toBeVisible();
+  await expect(page.getByTestId("company-suggestedCheckIn")).toHaveText("08:30 AM");
+  await page.goto("/admin/attendance?tab=register&project=p4");
+  // (The operator tests may already have marked everyone here, so check the register's setting, not a row.)
+  await expect(page.getByTestId("register")).toHaveAttribute("data-suggested-in", "08:30");
+
+  // Site override for Guwahati only.
+  await page.goto("/admin/settings?site=p4");
+  const form = page.getByTestId("policy-form");
+  await form.getByTestId("inherit-suggestedCheckIn").uncheck();
+  await form.locator("#pol-suggestedCheckIn").fill("07:45");
+  await form.getByTestId("policy-save").click();
+  await expect(page.getByText(/Saved as version 1/)).toBeVisible();
+  await expect(page.locator("#site-p4").getByTestId("site-overrides")).toContainText("07:45 AM");
+  await page.goto("/admin/attendance?tab=register&project=p4");
+  await expect(page.getByTestId("register")).toHaveAttribute("data-suggested-in", "07:45");
+
+  // Put both back (as new versions: history is never edited), so other tests see the original settings.
+  await page.goto("/admin/settings?site=p4");
+  await page.getByTestId("policy-form").getByTestId("inherit-suggestedCheckIn").check();
+  await page.getByTestId("policy-form").getByTestId("policy-save").click();
+  await expect(page.getByText(/Saved as version 2/)).toBeVisible();
+  await page.goto("/admin/settings?edit=company");
+  await page.locator("#pol-suggestedCheckIn").fill("");
+  await page.getByTestId("policy-save").click();
+  await expect(page.getByText(/Saved as version 3/)).toBeVisible();
+  await expect(page.getByTestId("company-suggestedCheckIn")).toHaveText("None (operators enter the time)");
+  await expect(page.getByTestId("settings-history").locator("li")).toHaveCount(9); // 1 company + 4 demo sites + 4 new versions
+});
+
+test("operators cannot open attendance settings", async ({ page }) => {
+  await page.goto("/login");
+  await page.getByTestId("demo-login-demo-op-jaipur").click();
+  await page.waitForURL("**/attendance");
+  await page.goto("/admin/settings");
+  await page.waitForURL("**/attendance");
+});

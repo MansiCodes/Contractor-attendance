@@ -8,7 +8,8 @@ import { loadRegister } from "@/lib/server/services/attendance";
 import { getAuditLog, getReport } from "@/lib/server/services/reports";
 import { requirePageContext } from "@/lib/server/session";
 import { formatINR, payableLabel, type ReportGroup, type ReportRow } from "@/lib/domain/report";
-import { DEFAULT_TIMEZONE, addDays, formatDateShort, formatTime12, instantToLocal, isValidDate, monthRange, todayIn } from "@/lib/domain/time";
+import { addDays, formatDateShort, formatMinutes, formatTime12, instantToLocal, isValidDate, monthRange } from "@/lib/domain/time";
+import { headOfficeTimezone, headOfficeToday } from "@/lib/server/services/context";
 import type { AttendanceSnapshot } from "@/lib/domain/types";
 import { cn } from "@/lib/utils";
 
@@ -88,7 +89,10 @@ function GroupTable({ groups, withProject }: { groups: ReportGroup[]; withProjec
                 {withProject ? <td className={cn(td, "max-w-56 truncate")}>{g.projectName}</td> : <td className={cn(td, "text-right")}>{g.sites}</td>}
                 <td className={cn(td, "text-right")}>{g.totals.workers}</td>
                 <td className={cn(td, "text-right")}>{g.totals.presentDays}</td>
-                <td className={cn(td, "text-right")}>{g.totals.absentDays}</td>
+                <td className={cn(td, "text-right whitespace-nowrap")}>
+                  {g.totals.absentDays}
+                  {g.totals.notMarkedAbsentDays > 0 && <span className="text-xs text-absent"> +{g.totals.notMarkedAbsentDays} not marked</span>}
+                </td>
                 <td className={cn(td, "text-right", g.totals.pendingDays > 0 && "font-semibold text-pending")}>{g.totals.pendingDays}</td>
                 <td className={cn(td, "text-right")}>{g.totals.incompleteDays}</td>
                 <td className={cn(td, "text-right")}>{hours(g.totals.netHours)}</td>
@@ -119,7 +123,11 @@ function GroupTable({ groups, withProject }: { groups: ReportGroup[]; withProjec
                 {(
                   [
                     ["Present", g.totals.presentDays, "text-present"],
-                    ["Absent", g.totals.absentDays, "text-absent"],
+                    [
+                      "Absent",
+                      g.totals.notMarkedAbsentDays > 0 ? `${g.totals.absentDays}+${g.totals.notMarkedAbsentDays}` : g.totals.absentDays,
+                      "text-absent",
+                    ],
                     ["Pending", g.totals.pendingDays, g.totals.pendingDays > 0 ? "text-pending" : ""],
                     ["Hours", hours(g.totals.netHours), ""],
                   ] as const
@@ -141,6 +149,31 @@ function GroupTable({ groups, withProject }: { groups: ReportGroup[]; withProjec
 const STATUS_TONE: Record<ReportRow["status"], Tone> = { present: "present", absent: "absent", pending: "pending" };
 const STATUS_LABEL: Record<ReportRow["status"], string> = { present: "Present", absent: "Absent", pending: "Pending" };
 
+/** Attendance-policy labels for a row (display only; they never change pay). */
+function rowNotes(r: ReportRow): string[] {
+  const l = r.labels;
+  return [
+    r.checkInSource === "suggested" ? "IN as suggested" : null,
+    l.lateMinutes !== null ? `Late ${formatMinutes(l.lateMinutes)}` : null,
+    l.halfDay ? "Half day" : null,
+    l.overtimeMinutes !== null ? `OT ${formatMinutes(l.overtimeMinutes)}` : null,
+  ].filter((n): n is string => !!n);
+}
+
+function StatusCell({ r }: { r: ReportRow }) {
+  const notes = rowNotes(r);
+  return (
+    <>
+      {r.labels.notMarkedAbsent ? (
+        <StatusPill tone="absent">Absent – not marked</StatusPill>
+      ) : (
+        <StatusPill tone={STATUS_TONE[r.status]}>{STATUS_LABEL[r.status]}</StatusPill>
+      )}
+      {notes.length > 0 && <div className="mt-0.5 text-xs text-pending">{notes.join(" · ")}</div>}
+    </>
+  );
+}
+
 function amountCell(r: ReportRow) {
   if (r.calc.amountState === "ok" && r.calc.amount !== null) return formatINR(r.calc.amount);
   if (r.calc.amountState === "not_configured") return <span className="text-muted-foreground italic">Not configured</span>;
@@ -148,7 +181,7 @@ function amountCell(r: ReportRow) {
 }
 
 async function ReportTab({ sp, ctx }: { sp: Record<string, string | undefined>; ctx: Ctx }) {
-  const today = todayIn(DEFAULT_TIMEZONE, ctx.now);
+  const today = await headOfficeToday(ctx);
   const month = monthRange(today);
   const from = sp.from && isValidDate(sp.from) ? sp.from : month.from;
   const to = sp.to && isValidDate(sp.to) ? sp.to : month.to;
@@ -248,7 +281,8 @@ async function ReportTab({ sp, ctx }: { sp: Record<string, string | undefined>; 
         <p className="tabular text-sm text-muted-foreground">
           <strong className="font-semibold text-foreground">{t.workers}</strong> workers · <strong className="font-semibold text-present">{t.presentDays}</strong> present days ·{" "}
           <strong className="font-semibold text-absent">{t.absentDays}</strong> absent · <strong className={cn("font-semibold", t.pendingDays > 0 ? "text-pending" : "text-foreground")}>{t.pendingDays}</strong>{" "}
-          pending · <strong className="font-semibold text-foreground">{hours(t.netHours)}</strong> hrs · Est. <strong className="font-semibold text-foreground">{formatINR(t.amount)}</strong>
+          pending{t.notMarkedAbsentDays > 0 && <> · <strong className="font-semibold text-absent">{t.notMarkedAbsentDays}</strong> absent – not marked</>} ·{" "}
+          <strong className="font-semibold text-foreground">{hours(t.netHours)}</strong> hrs · Est. <strong className="font-semibold text-foreground">{formatINR(t.amount)}</strong>
           {t.unconfiguredDays > 0 && ` (+${t.unconfiguredDays} days not configured)`}
         </p>
       </div>
@@ -305,7 +339,7 @@ async function ReportTab({ sp, ctx }: { sp: Record<string, string | undefined>; 
                       <td className="max-w-44 truncate px-4 py-2">{r.contractorName}</td>
                       <td className="max-w-52 truncate px-4 py-2">{r.projectName}</td>
                       <td className="px-4 py-2">
-                        <StatusPill tone={STATUS_TONE[r.status]}>{STATUS_LABEL[r.status]}</StatusPill>
+                        <StatusCell r={r} />
                       </td>
                       <td className="px-4 py-2 whitespace-nowrap">{r.checkIn ? formatTime12(r.checkIn) : "—"}</td>
                       <td className="px-4 py-2 whitespace-nowrap">
@@ -331,7 +365,9 @@ async function ReportTab({ sp, ctx }: { sp: Record<string, string | undefined>; 
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between gap-2">
                         <span className="truncate text-sm font-semibold">{r.workerName}</span>
-                        <StatusPill tone={STATUS_TONE[r.status]}>{STATUS_LABEL[r.status]}</StatusPill>
+                        <div className="text-right">
+                          <StatusCell r={r} />
+                        </div>
                       </div>
                       <div className="truncate text-xs text-muted-foreground">{r.contractorName}</div>
                       {r.status === "present" && (
@@ -362,12 +398,12 @@ async function ReportTab({ sp, ctx }: { sp: Record<string, string | undefined>; 
 function snap(v: AttendanceSnapshot | null, tz: string) {
   if (!v) return "—";
   const t = (iso: string | null) => (iso ? formatTime12(instantToLocal(iso, tz).time) : "—");
-  if (v.status === "present") return `Present · IN ${t(v.checkInAt)} · OUT ${t(v.checkOutAt)}`;
+  if (v.status === "present") return `Present · IN ${t(v.checkInAt)}${v.checkInSource === "suggested" ? " (suggested)" : ""} · OUT ${t(v.checkOutAt)}`;
   return v.status === "absent" ? "Absent" : "Pending";
 }
 
 async function LogTab({ sp, ctx }: { sp: Record<string, string | undefined>; ctx: Ctx }) {
-  const today = todayIn(DEFAULT_TIMEZONE, ctx.now);
+  const [today, officeTz] = await Promise.all([headOfficeToday(ctx), headOfficeTimezone(ctx)]);
   const from = sp.from && isValidDate(sp.from) ? sp.from : addDays(today, -7);
   const to = sp.to && isValidDate(sp.to) ? sp.to : today;
   const projectId = sp.project || null;
@@ -411,7 +447,7 @@ async function LogTab({ sp, ctx }: { sp: Record<string, string | undefined>; ctx
       ) : (
         <Group as="ul" className="text-sm" data-testid="audit-log">
           {entries.map((e) => {
-            const tz = tzOf.get(e.projectId) ?? DEFAULT_TIMEZONE;
+            const tz = tzOf.get(e.projectId) ?? officeTz;
             const at = instantToLocal(e.changedAt, tz);
             return (
               <li key={e.id} className="space-y-1.5 px-4 py-3">

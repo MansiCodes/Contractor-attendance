@@ -32,20 +32,32 @@ grant select, insert, update, delete on storage.objects to authenticated;
 
 export const MIGRATIONS_DIR = join(process.cwd(), "supabase", "migrations");
 
-export async function createDb() {
+/**
+ * A fresh database with the migrations applied. `until` stops after the migration
+ * whose file name starts with that prefix, so upgrade tests can add legacy data first
+ * and then call applyMigrations({ after }).
+ */
+export async function createDb(opts: { until?: string } = {}) {
   const db = new PGlite({ extensions: { btree_gist } });
   await db.exec(SHIM);
+  await applyMigrations(db, { until: opts.until });
+  return db;
+}
+
+export type Db = PGlite;
+
+export async function applyMigrations(db: Db, opts: { after?: string; until?: string } = {}) {
   for (const file of readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).sort()) {
+    const id = file.split("_")[0];
+    if (opts.after && id <= opts.after) continue;
+    if (opts.until && id > opts.until) continue;
     try {
       await db.exec(readFileSync(join(MIGRATIONS_DIR, file), "utf8"));
     } catch (e) {
       throw new Error(`Migration ${file} failed: ${(e as Error).message}`);
     }
   }
-  return db;
 }
-
-export type Db = Awaited<ReturnType<typeof createDb>>;
 
 /** Runs `fn` as an authenticated Supabase user (RLS applies). */
 export async function asUser<T>(db: Db, userId: string, fn: () => Promise<T>): Promise<T> {

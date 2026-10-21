@@ -33,13 +33,17 @@ Demo data lives only in server memory. It never touches a database, and it reset
 
 ## 2. How attendance works
 
-- When the register opens, every assigned worker is **Pending**, with a *suggested* IN time of 9:00 AM (configurable per site). Pending workers are never counted as present or payable, and opening the register creates no records.
+- When the register opens, every assigned worker is **Pending**. If the site has a *suggested* IN time (Settings → Attendance; none by default), it is shown as a starting point. Pending workers are never counted as present or payable, and opening the register creates no records.
+- Tapping **P** accepts the suggested time, and the record is flagged "IN as suggested" in reports, the export and the change log. With no suggestion, or one that is still ahead of the clock, **P** opens the time picker instead.
 - Tap **P** (Present) to confirm, tap the IN time to change it (this also confirms the worker), or tap **A** (Absent).
 - OUT is always recorded separately. The app never makes up a checkout: OUT cannot be earlier than IN, and it cannot be in the future. A worker with no OUT is counted as *present but incomplete* and is left out of hours and payables.
 - Overnight shifts are allowed only when the admin turns them on for that site.
+- How far ahead of the clock an IN or OUT may be recorded comes from the site's settings (company default: IN 60 min, OUT 5 min). The same check runs in the browser, on the server and in the database, for single and bulk entries alike.
 - Bulk actions ("Mark all pending present" and "Record OUT for N workers") are labelled **Bulk confirmed** in the change log.
 - Unsaved changes are highlighted, kept on the device if the page is reloaded, and saved together in one all-or-nothing transaction. If someone else edits the same entry first, the save is rejected with a version conflict instead of overwriting their change.
-- By default, operators can only edit today. Admins can correct any past date, and every change is logged with who made it, old → new values, and when.
+- By default, operators can only edit today. Settings can allow up to 7 past days and a cutoff time on the last day. Admins can correct any past date, and every change is logged with who made it, old → new values, and when.
+
+**Attendance settings** (admin only, Settings in the menu): company-wide defaults with optional per-site overrides for the suggested IN time, shift, future-time limits, overnight shifts, operator edit window and cutoff, late / half-day / overtime *labels* (they never change pay) and an optional report-only "absent – not marked". Every change is a new version from a start date; earlier versions and recorded attendance are never rewritten. Design and decisions: [docs/attendance-settings.md](docs/attendance-settings.md).
 
 **Payments** come from versioned contractor rules: per day or per hour, full-day and half-day thresholds, unpaid break, and optional overtime. Rule versions are append-only, so changing a rate creates a new version from a chosen date and never rewrites earlier totals. Amounts are *estimates*, not disbursements.
 
@@ -102,4 +106,5 @@ tests/                      unit, db (PGlite) and e2e (Playwright)
 - **Not yet tested against a real Supabase project**: live sign-in, the Supabase data store, photo upload and creating operator accounts. The SQL itself (schema, RLS, functions, triggers) is tested in PGlite, but PGlite is not PostgREST or GoTrue.
 - **Payment rates and thresholds**: none are assumed. Configure each contractor's real terms under Contractors → Payment rules.
 - **Operator role**: the operator's job designation is still open. The app makes no assumption about whether the operator works for the contractor or for NF.
-- **Timezone**: every site defaults to `Asia/Kolkata`. The value is stored per site if you ever need another.
+- **Timezone**: new sites start with the company default from Settings (`Asia/Kolkata` initially). Each site keeps its own timezone, which locks once attendance has been recorded there.
+- **Attendance settings migrations** (`20261022000001`, `20261022000002`) are tested only in PGlite so far. They have not been applied to any Supabase project.

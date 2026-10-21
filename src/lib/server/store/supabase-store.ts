@@ -14,9 +14,10 @@ import type {
   Worker,
   WorkerAssignment,
 } from "@/lib/domain/types";
+import type { AttendancePolicyVersion, ResolvedPolicy } from "@/lib/domain/policy";
 import { createAdminSupabase } from "@/lib/supabase/server";
 import * as map from "./supabase-mappers";
-import type { AttendanceQuery, AttendanceWrite, AuditQuery, DataStore, PaymentRuleFields, ProjectFields } from "./types";
+import type { AttendancePolicyFields, AttendanceQuery, AttendanceWrite, AuditQuery, DataStore, PaymentRuleFields, ProjectFields } from "./types";
 
 const PAGE = 1000;
 type Query = ReturnType<ReturnType<SupabaseClient["from"]>["select"]>;
@@ -115,6 +116,18 @@ export class SupabaseStore implements DataStore {
   }
   async listPaymentRules(): Promise<PaymentRule[]> {
     return (await this.all<map.Row>("contractor_payment_rules")).map(map.paymentRule);
+  }
+  async listAttendancePolicies(): Promise<AttendancePolicyVersion[]> {
+    return (await this.all<map.Row>("attendance_policies")).map(map.policyRow);
+  }
+  async getEffectivePolicy(projectId: string, date: string): Promise<ResolvedPolicy> {
+    const row = check(await this.db.rpc("attendance_policy_for", { p_project_id: projectId, p_date: date }).single());
+    return map.effectivePolicy(row as map.Row);
+  }
+  async listProjectsWithAttendance(): Promise<string[]> {
+    // A set-returning function of a scalar: accept bare values or single-key rows.
+    const rows = (check(await this.db.rpc("projects_with_attendance")) ?? []) as unknown[];
+    return rows.map((v) => String(v !== null && typeof v === "object" ? Object.values(v)[0] : v));
   }
   async listAuditLogs(q: AuditQuery): Promise<AuditLog[]> {
     let query = this.db.from("attendance_audit_logs").select("*");
@@ -246,6 +259,14 @@ export class SupabaseStore implements DataStore {
     return map.paymentRule(row);
   }
 
+  // ---------- attendance policies ----------
+
+  async createAttendancePolicy(input: AttendancePolicyFields) {
+    // version and created_by are set by the database trigger
+    const row = check(await this.db.from("attendance_policies").insert(map.policyFields(input)).select("*").single());
+    return map.policyRow(row);
+  }
+
   // ---------- attendance ----------
 
   async saveAttendance(projectId: string, workDate: string, items: AttendanceWrite[]) {
@@ -259,6 +280,7 @@ export class SupabaseStore implements DataStore {
           status: i.status,
           check_in_at: i.checkInAt,
           check_out_at: i.checkOutAt,
+          check_in_source: i.checkInSource,
           method: i.method,
           expected_version: i.expectedVersion,
         })),

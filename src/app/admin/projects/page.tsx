@@ -8,6 +8,7 @@ import { getAppMode } from "@/lib/config";
 import { assignmentCovers } from "@/lib/domain/register";
 import { adminDirectory } from "@/lib/server/services/admin";
 import { dailySummaries } from "@/lib/server/services/attendance";
+import { newSiteTimezone } from "@/lib/server/services/settings";
 import { requirePageContext } from "@/lib/server/session";
 import { cn } from "@/lib/utils";
 
@@ -19,7 +20,7 @@ export default async function ProjectsPage({ searchParams }: { searchParams: Sea
   const ctx = await requirePageContext("admin");
   const sp = await searchParams;
   const tab = sp.tab === "operators" ? "operators" : "sites";
-  const [dir, today] = await Promise.all([adminDirectory(ctx), dailySummaries(ctx, { days: 1 })]);
+  const [dir, today, defaultTimezone] = await Promise.all([adminDirectory(ctx), dailySummaries(ctx, { days: 1 }), newSiteTimezone(ctx)]);
   const contractorById = new Map(dir.contractors.map((c) => [c.id, c]));
   const projects = [...dir.projects].sort((a, b) => Number(b.isActive) - Number(a.isActive) || a.name.localeCompare(b.name));
   const operators = dir.profiles
@@ -31,7 +32,7 @@ export default async function ProjectsPage({ searchParams }: { searchParams: Sea
       <PageHeader
         title="Projects"
         description="Government project sites and who records attendance there."
-        actions={tab === "sites" ? <AddProjectDialog /> : <AddOperatorDialog live={getAppMode() === "live"} />}
+        actions={tab === "sites" ? <AddProjectDialog defaultTimezone={defaultTimezone} /> : <AddOperatorDialog live={getAppMode() === "live"} />}
       />
 
       <SegmentedLinks

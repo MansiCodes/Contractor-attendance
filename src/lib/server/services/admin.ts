@@ -15,16 +15,17 @@ import {
   workerTransfer,
   workerUpdate,
 } from "@/lib/domain/schemas";
-import { DEFAULT_TIMEZONE, todayIn } from "@/lib/domain/time";
+import { todayIn } from "@/lib/domain/time";
 import type { Contractor, Profile, Project, Worker } from "@/lib/domain/types";
-import { assertAdmin, type ServiceContext } from "./context";
+import { assertAdmin, headOfficeToday, type ServiceContext } from "./context";
 
 // Every function here is admin-only and re-validates its input.
 
 const MAX_PHOTO_BYTES = 2 * 1024 * 1024;
 const PHOTO_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
-const today = (ctx: ServiceContext) => todayIn(DEFAULT_TIMEZONE, ctx.now);
+/** "Today" at a site: its own local date. */
+const siteToday = (ctx: ServiceContext, project: Project) => todayIn(project.timezone, ctx.now);
 
 async function getContractor(ctx: ServiceContext, contractorId: string): Promise<Contractor> {
   const c = (await ctx.store.listContractors()).find((x) => x.id === contractorId);
@@ -92,14 +93,17 @@ export async function addContractorToProject(ctx: ServiceContext, raw: unknown) 
   assertAdmin(ctx);
   const input = z.object({ contractorId: id, projectId: id, startDate: dateString.optional() }).parse(raw);
   await getContractor(ctx, input.contractorId);
-  await getProject(ctx, input.projectId);
-  await ctx.store.addContractorToProject(input.contractorId, input.projectId, input.startDate ?? today(ctx), ctx.actor);
+  const project = await getProject(ctx, input.projectId);
+  await ctx.store.addContractorToProject(input.contractorId, input.projectId, input.startDate ?? siteToday(ctx, project), ctx.actor);
 }
 
 export async function removeContractorFromProject(ctx: ServiceContext, raw: unknown) {
   assertAdmin(ctx);
   const input = z.object({ assignmentId: id }).parse(raw);
-  await ctx.store.endContractorProject(input.assignmentId, today(ctx), ctx.actor);
+  const assignment = (await ctx.store.listContractorProjects()).find((a) => a.id === input.assignmentId);
+  if (!assignment) throw notFound("Assignment");
+  const project = await getProject(ctx, assignment.projectId);
+  await ctx.store.endContractorProject(input.assignmentId, siteToday(ctx, project), ctx.actor);
 }
 
 // ---------- workers ----------
@@ -186,7 +190,7 @@ export async function createPaymentRule(ctx: ServiceContext, raw: unknown) {
   assertAdmin(ctx);
   const input = paymentRuleInput.parse(raw);
   await getContractor(ctx, input.contractorId);
-  if (input.effectiveFrom < today(ctx) && !input.allowBackdate) {
+  if (input.effectiveFrom < (await headOfficeToday(ctx)) && !input.allowBackdate) {
     throw invalid("This rule starts in the past and would change past totals. Tick the confirmation box to proceed.");
   }
   const rules = (await ctx.store.listPaymentRules()).filter((r) => r.contractorId === input.contractorId);
@@ -213,7 +217,8 @@ export async function createPaymentRule(ctx: ServiceContext, raw: unknown) {
 
 export async function adminDirectory(ctx: ServiceContext) {
   assertAdmin(ctx);
-  const [profiles, contractors, projects, cpas, workers, assignments, access, rules] = await Promise.all([
+  const [today, profiles, contractors, projects, cpas, workers, assignments, access, rules] = await Promise.all([
+    headOfficeToday(ctx),
     ctx.store.listProfiles(),
     ctx.store.listContractors(),
     ctx.store.listProjects(),
@@ -223,5 +228,5 @@ export async function adminDirectory(ctx: ServiceContext) {
     ctx.store.listOperatorAccess(),
     ctx.store.listPaymentRules(),
   ]);
-  return { today: today(ctx), profiles, contractors, projects, cpas, workers, assignments, access, rules };
+  return { today, profiles, contractors, projects, cpas, workers, assignments, access, rules };
 }
