@@ -6,8 +6,10 @@ import { formatMinutes, formatTime12 } from "@/lib/domain/time";
 
 export const FIELD_LABELS: Record<PolicyField, string> = {
   suggestedCheckIn: "Suggested IN time",
+  nightSuggestedCheckIn: "Suggested IN time (night shift)",
   shiftStart: "Shift start",
   shiftEnd: "Shift end",
+  breakMinutes: "Break",
   allowOvernight: "Overnight shifts",
   inFutureToleranceMin: "IN may be ahead of the clock by",
   outFutureToleranceMin: "OUT may be ahead of the clock by",
@@ -23,10 +25,13 @@ export const FIELD_LABELS: Record<PolicyField, string> = {
 export function describePolicyValue(field: PolicyField, v: PolicyRowValues[PolicyField]): string {
   switch (field) {
     case "suggestedCheckIn":
+    case "nightSuggestedCheckIn":
       return v === null ? "None (operators enter the time)" : formatTime12(v as string);
     case "shiftStart":
     case "shiftEnd":
       return v === null ? "Not set" : formatTime12(v as string);
+    case "breakMinutes":
+      return v === null || v === 0 ? "None" : `${v} min (not counted as worked time)`;
     case "editCutoffTime":
       return v === null ? "End of the last editable day" : `${formatTime12(v as string)} on the last editable day`;
     case "allowOvernight":

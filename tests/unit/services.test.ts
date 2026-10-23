@@ -4,6 +4,7 @@ import { loadRegister, saveAttendance, dailySummaries } from "@/lib/server/servi
 import * as admin from "@/lib/server/services/admin";
 import { getAuditLog, getOverview, getReport } from "@/lib/server/services/reports";
 import type { DemoStore } from "@/lib/server/store/demo-store";
+import { payableLabel } from "@/lib/domain/report";
 import { addDays } from "@/lib/domain/time";
 import { actors, ctxFor, freshStore, NOW, TODAY } from "./helpers";
 
@@ -17,35 +18,35 @@ const expectCode = async (p: Promise<unknown>, code: AppError["code"]) => {
   await p.catch((e: AppError) => expect(e.code).toBe(code));
 };
 
-/** First pending worker on the Pune (p2) / Pragati (c2) register today. */
-async function puneRegister() {
-  return loadRegister(ctxFor(store, actors.puneLucknow), { projectId: "p2", contractorId: "c2" });
+/** The LED Rope Light Plant (p2) / Pragati (c2) register today. */
+async function ledRegister() {
+  return loadRegister(ctxFor(store, actors.ledUpcast), { projectId: "p2", contractorId: "c2" });
 }
 
 describe("1. operators cannot create or change workers", () => {
   it("rejects worker creation, deactivation, transfer and rate changes by an operator", async () => {
-    const op = ctxFor(store, actors.puneLucknow);
+    const op = ctxFor(store, actors.ledUpcast);
     await expectCode(admin.createWorker(op, { fullName: "Test Worker", contractorId: "c2", projectId: "p2", startDate: TODAY }), "forbidden");
     await expectCode(admin.deactivateWorker(op, "w1", { lastWorkingDate: TODAY }), "forbidden");
     await expectCode(admin.transferWorker(op, "w1", { projectId: "p3", contractorId: "c1", effectiveDate: TODAY }), "forbidden");
     await expectCode(admin.createPaymentRule(op, { contractorId: "c4", effectiveFrom: TODAY, rateType: "per_day", dayRate: 1 }), "forbidden");
-    await expectCode(admin.setOperatorAccess(op, { operatorId: actors.puneLucknow.id, projectId: "p1", granted: true }), "forbidden");
+    await expectCode(admin.setOperatorAccess(op, { operatorId: actors.ledUpcast.id, projectId: "p1", granted: true }), "forbidden");
     expect((await store.listWorkers()).some((w) => w.fullName === "Test Worker")).toBe(false);
   });
 });
 
-describe("2. operators cannot access unauthorised project data", () => {
-  it("only lists assigned sites and never loads another site's register", async () => {
-    const view = await loadRegister(ctxFor(store, actors.puneLucknow), { projectId: "p1" });
+describe("2. operators cannot access unauthorised plant data", () => {
+  it("only lists assigned plants and never loads another plant's register", async () => {
+    const view = await loadRegister(ctxFor(store, actors.ledUpcast), { projectId: "p1" });
     expect(view.projects.map((p) => p.id).sort()).toEqual(["p2", "p3"]);
     expect(view.project?.id).not.toBe("p1");
   });
 
-  it("rejects saving attendance for a site the operator is not assigned to", async () => {
-    const jaipur = await loadRegister(ctxFor(store, actors.jaipur), { projectId: "p1", contractorId: "c2" });
+  it("rejects saving attendance for a plant the operator is not assigned to", async () => {
+    const jaipur = await loadRegister(ctxFor(store, actors.pvc), { projectId: "p1", contractorId: "c2" });
     const w = jaipur.rows[0];
     await expectCode(
-      saveAttendance(ctxFor(store, actors.puneLucknow), {
+      saveAttendance(ctxFor(store, actors.ledUpcast), {
         projectId: "p1", contractorId: "c2", workDate: TODAY,
         items: [{ workerId: w.workerId, status: "absent", checkIn: null, checkOut: null, checkInSource: "entered", method: "individual", expectedVersion: w.saved?.version ?? null }],
       }),
@@ -54,7 +55,7 @@ describe("2. operators cannot access unauthorised project data", () => {
   });
 
   it("blocks company-wide reports, payables and audit logs for operators", async () => {
-    const op = ctxFor(store, actors.jaipur);
+    const op = ctxFor(store, actors.pvc);
     await expectCode(getReport(op, { from: "2026-10-01", to: TODAY }), "forbidden");
     await expectCode(getOverview(op), "forbidden");
     await expectCode(getAuditLog(op, {}), "forbidden");
@@ -64,17 +65,17 @@ describe("2. operators cannot access unauthorised project data", () => {
 
   it("restricts operators to today (by default) but lets admins correct past dates", async () => {
     const yesterday = addDays(TODAY, -1);
-    const view = await loadRegister(ctxFor(store, actors.puneLucknow), { projectId: "p2", contractorId: "c2", date: yesterday });
+    const view = await loadRegister(ctxFor(store, actors.ledUpcast), { projectId: "p2", contractorId: "c2", date: yesterday });
     expect(view.editable).toBe(false);
     const row = view.rows[0];
     const item = { workerId: row.workerId, status: "absent" as const, checkIn: null, checkOut: null, checkInSource: "entered" as const, method: "individual" as const, expectedVersion: row.saved?.version ?? null };
-    await expectCode(saveAttendance(ctxFor(store, actors.puneLucknow), { projectId: "p2", contractorId: "c2", workDate: yesterday, items: [item] }), "forbidden");
+    await expectCode(saveAttendance(ctxFor(store, actors.ledUpcast), { projectId: "p2", contractorId: "c2", workDate: yesterday, items: [item] }), "forbidden");
     const res = await saveAttendance(ctxFor(store, actors.admin), { projectId: "p2", contractorId: "c2", workDate: yesterday, items: [item] });
     expect(res.saved).toBeLessThanOrEqual(1);
   });
 
   it("rejects future dates for everyone", async () => {
-    const view = await puneRegister();
+    const view = await ledRegister();
     const row = view.rows[0];
     await expectCode(
       saveAttendance(ctxFor(store, actors.admin), {
@@ -86,12 +87,12 @@ describe("2. operators cannot access unauthorised project data", () => {
   });
 });
 
-describe("3–4. admin manages workers; workers appear only on their assigned site", () => {
-  it("adds a worker who then appears only on that site's register", async () => {
+describe("3–4. admin manages workers; workers appear only on their assigned plant", () => {
+  it("adds a worker who then appears only on that plant's register", async () => {
     const a = ctxFor(store, actors.admin);
     const w = await admin.createWorker(a, { fullName: "नया कामगार", contractorId: "c2", projectId: "p2", startDate: TODAY });
     expect(w.code).toMatch(/^W-\d{5}$/);
-    expect((await puneRegister()).rows.some((r) => r.workerId === w.id)).toBe(true);
+    expect((await ledRegister()).rows.some((r) => r.workerId === w.id)).toBe(true);
     const jaipur = await loadRegister(a, { projectId: "p1", contractorId: "c2" });
     expect(jaipur.rows.some((r) => r.workerId === w.id)).toBe(false);
   });
@@ -105,22 +106,22 @@ describe("3–4. admin manages workers; workers appear only on their assigned si
 
   it("deactivated workers leave the register after their last working date but keep history", async () => {
     const a = ctxFor(store, actors.admin);
-    const view = await puneRegister();
+    const view = await ledRegister();
     const target = view.rows.find((r) => r.saved === null)!;
     await admin.deactivateWorker(a, target.workerId, { lastWorkingDate: addDays(TODAY, -1) });
-    expect((await puneRegister()).rows.some((r) => r.workerId === target.workerId)).toBe(false);
+    expect((await ledRegister()).rows.some((r) => r.workerId === target.workerId)).toBe(false);
     const past = await loadRegister(a, { projectId: "p2", contractorId: "c2", date: addDays(TODAY, -3) });
     expect(past.rows.some((r) => r.workerId === target.workerId)).toBe(true);
     await admin.reactivateWorker(a, target.workerId, { projectId: "p2", startDate: TODAY });
-    expect((await puneRegister()).rows.some((r) => r.workerId === target.workerId)).toBe(true);
+    expect((await ledRegister()).rows.some((r) => r.workerId === target.workerId)).toBe(true);
   });
 });
 
 describe("5–8. attendance capture rules", () => {
   it("loading the register creates no records: everyone starts pending with the site's suggested time", async () => {
     const before = (await store.listAttendance({ from: TODAY, to: TODAY })).length;
-    const view = await puneRegister();
-    expect(view.policy?.day.suggestedCheckIn).toBe("09:00"); // the Pune demo site's setting, not a built-in default
+    const view = await ledRegister();
+    expect(view.policy?.day.suggestedCheckIn).toBe("09:00"); // the LED Rope Light demo plant's setting, not a built-in default
     expect(view.rows.every((r) => r.saved === null)).toBe(true);
     expect((await store.listAttendance({ from: TODAY, to: TODAY })).length).toBe(before);
     const report = await getReport(ctxFor(store, actors.admin), { from: TODAY, to: TODAY, projectId: "p2", contractorId: "c2" });
@@ -130,8 +131,8 @@ describe("5–8. attendance capture rules", () => {
   });
 
   it("confirms presence, late arrival, absence and checkout; totals follow", async () => {
-    const op = ctxFor(store, actors.puneLucknow);
-    const [a, b, c] = (await puneRegister()).rows;
+    const op = ctxFor(store, actors.ledUpcast);
+    const [a, b, c] = (await ledRegister()).rows;
     await saveAttendance(op, {
       projectId: "p2", contractorId: "c2", workDate: TODAY,
       items: [
@@ -155,8 +156,8 @@ describe("5–8. attendance capture rules", () => {
   });
 
   it("rejects OUT before IN, and OUT in the future", async () => {
-    const op = ctxFor(store, actors.puneLucknow);
-    const [a] = (await puneRegister()).rows;
+    const op = ctxFor(store, actors.ledUpcast);
+    const [a] = (await ledRegister()).rows;
     const base = { projectId: "p2", contractorId: "c2", workDate: TODAY };
     await expectCode(saveAttendance(op, { ...base, items: [{ workerId: a.workerId, status: "present", checkIn: "09:00", checkOut: "08:00", checkInSource: "entered", method: "individual", expectedVersion: null }] }), "invalid");
     // NOW is 12:30 IST — an 18:00 checkout has not happened yet.
@@ -165,8 +166,8 @@ describe("5–8. attendance capture rules", () => {
   });
 
   it("saves are all-or-nothing", async () => {
-    const op = ctxFor(store, actors.puneLucknow);
-    const [a, b] = (await puneRegister()).rows;
+    const op = ctxFor(store, actors.ledUpcast);
+    const [a, b] = (await ledRegister()).rows;
     await expectCode(
       saveAttendance(op, {
         projectId: "p2", contractorId: "c2", workDate: TODAY,
@@ -181,31 +182,31 @@ describe("5–8. attendance capture rules", () => {
   });
 
   it("detects concurrent edits with record versions", async () => {
-    const op = ctxFor(store, actors.puneLucknow);
-    const [a] = (await puneRegister()).rows;
+    const op = ctxFor(store, actors.ledUpcast);
+    const [a] = (await ledRegister()).rows;
     const item = { workerId: a.workerId, status: "present" as const, checkIn: "09:00", checkOut: null, checkInSource: "entered" as const, method: "individual" as const, expectedVersion: null };
     await saveAttendance(op, { projectId: "p2", contractorId: "c2", workDate: TODAY, items: [item] });
     await expectCode(saveAttendance(op, { projectId: "p2", contractorId: "c2", workDate: TODAY, items: [{ ...item, status: "absent", checkIn: null }] }), "conflict");
   });
 
-  it("supports overnight shifts only where enabled (Bhubaneswar demo site)", async () => {
+  it("supports overnight shifts only where enabled (Upcast demo plant)", async () => {
     const lateNow = new Date("2026-10-20T00:30:00.000Z"); // 06:00 IST on the 20th
-    const east = ctxFor(store, actors.east, lateNow);
+    const east = ctxFor(store, actors.quad, lateNow);
     const yesterday = addDays(TODAY, -1);
     const a = ctxFor(store, actors.admin, lateNow);
-    const view = await loadRegister(a, { projectId: "p5", contractorId: "c4", date: yesterday });
+    const view = await loadRegister(a, { projectId: "p3", contractorId: "c4", date: yesterday });
     const w = view.rows[0];
     await saveAttendance(a, {
-      projectId: "p5", contractorId: "c4", workDate: yesterday,
+      projectId: "p3", contractorId: "c4", workDate: yesterday,
       items: [{ workerId: w.workerId, status: "present", checkIn: "21:00", checkOut: "05:30", checkInSource: "entered", method: "individual", expectedVersion: w.saved?.version ?? null }],
     });
-    const rec = (await store.listAttendance({ projectIds: ["p5"], from: yesterday, to: yesterday })).find((r) => r.workerId === w.workerId)!;
+    const rec = (await store.listAttendance({ projectIds: ["p3"], from: yesterday, to: yesterday })).find((r) => r.workerId === w.workerId)!;
     expect(rec.checkOutAt).toBe("2026-10-20T00:00:00.000Z"); // 05:30 IST next day
     expect(east.actor.role).toBe("operator");
   });
 });
 
-describe("9–10. totals and multi-site contractors", () => {
+describe("9–10. totals and multi-plant contractors", () => {
   it("contractor and grand totals equal the sum of their rows", async () => {
     const report = await getReport(ctxFor(store, actors.admin), { from: "2026-10-01", to: TODAY });
     const sum = (f: (r: (typeof report.rows)[number]) => number) => Math.round(report.rows.reduce((s, r) => s + f(r), 0) * 100) / 100;
@@ -220,17 +221,52 @@ describe("9–10. totals and multi-site contractors", () => {
     }
   });
 
-  it("a contractor deployed at several sites is reported per site and in total", async () => {
+  it("a contractor working at several plants is reported per plant and in total", async () => {
     const report = await getReport(ctxFor(store, actors.admin), { from: "2026-10-01", to: TODAY, contractorId: "c4" });
     expect(report.byContractor).toHaveLength(1);
     expect(report.byContractor[0].sites).toBe(3);
-    expect(new Set(report.byContractorProject.map((g) => g.projectId))).toEqual(new Set(["p2", "p3", "p5"]));
+    expect(new Set(report.byContractorProject.map((g) => g.projectId))).toEqual(new Set(["p2", "p3", "p4"]));
     expect(report.byContractor[0].ruleConfigured).toBe(false); // demo contractor without a rule
   });
 });
 
+describe("plant-wise totals", () => {
+  it("add up to the grand total and to each plant's contractor rows", async () => {
+    const report = await getReport(ctxFor(store, actors.admin), { from: "2026-10-01", to: TODAY });
+    expect(report.byProject.map((g) => g.projectId).sort()).toEqual(["p1", "p2", "p3", "p4"]);
+    const sum = (f: (g: (typeof report.byProject)[number]) => number) => Math.round(report.byProject.reduce((s, g) => s + f(g), 0) * 100) / 100;
+    expect(sum((g) => g.totals.presentDays)).toBe(report.totals.presentDays);
+    expect(sum((g) => g.totals.amount)).toBe(report.totals.amount);
+    for (const g of report.byProject) {
+      const parts = report.byContractorProject.filter((p) => p.projectId === g.projectId);
+      expect(parts).toHaveLength(g.contractors);
+      expect(parts.reduce((s, p) => s + p.totals.presentDays, 0)).toBe(g.totals.presentDays);
+    }
+    // Quad & Signalling: Sahyog has a rule, Udyam (demo) has none.
+    expect(report.byProject.find((g) => g.projectId === "p4")).toMatchObject({ contractors: 2, contractorsWithRules: 1 });
+  });
+
+  it("shows 'Not configured' for a plant whose contractors have no payment rule, even with only pending days", async () => {
+    const a = ctxFor(store, actors.admin);
+    const plant = await admin.createProject(a, { name: "New Plant (Demo)", location: "Unit 9 (Demo)", timezone: "Asia/Kolkata" });
+    await admin.addContractorToProject(a, { contractorId: "c4", projectId: plant.id, startDate: TODAY });
+    await admin.createWorker(a, { fullName: "Test Worker", contractorId: "c4", projectId: plant.id, startDate: TODAY });
+    const report = await getReport(a, { from: TODAY, to: TODAY, projectId: plant.id });
+    const g = report.byProject[0];
+    expect(g).toMatchObject({ contractors: 1, contractorsWithRules: 0 });
+    expect(g.totals.pendingDays).toBe(1);
+    expect(payableLabel(g.totals, g.contractorsWithRules > 0)).toBe("Not configured");
+  });
+
+  it("filters to one plant", async () => {
+    const report = await getReport(ctxFor(store, actors.admin), { from: "2026-10-01", to: TODAY, projectId: "p1" });
+    expect(report.byProject.map((g) => g.projectId)).toEqual(["p1"]);
+    expect(report.rows.every((r) => r.projectId === "p1")).toBe(true);
+  });
+});
+
 describe("11. transfers preserve history", () => {
-  it("keeps past attendance at the old site and moves the worker from the effective date", async () => {
+  it("keeps past attendance at the old plant and moves the worker from the effective date", async () => {
     const a = ctxFor(store, actors.admin);
     const view = await loadRegister(a, { projectId: "p3", contractorId: "c1" });
     const w = view.rows.find((r) => r.assigned)!;
@@ -249,7 +285,7 @@ describe("11. transfers preserve history", () => {
     expect((await loadRegister(a, { projectId: "p1", contractorId: "c1" })).rows.some((r) => r.workerId === w.workerId)).toBe(true);
   });
 
-  it("the seeded transferred worker has history at Lucknow and current deployment in Jaipur", async () => {
+  it("the seeded transferred worker has history at the Upcast Plant and current assignment at the PVC Plant", async () => {
     const assignments = (await store.listWorkerAssignments()).filter((x) => x.workerId === "w53");
     expect(assignments.map((x) => x.projectId)).toEqual(["p3", "p1"]);
   });
@@ -281,8 +317,8 @@ describe("12. rate changes do not silently rewrite history", () => {
 
 describe("15. audit log", () => {
   it("records who changed what, old and new values, and bulk vs individual", async () => {
-    const op = ctxFor(store, actors.puneLucknow);
-    const [a, b] = (await puneRegister()).rows;
+    const op = ctxFor(store, actors.ledUpcast);
+    const [a, b] = (await ledRegister()).rows;
     await saveAttendance(op, {
       projectId: "p2", contractorId: "c2", workDate: TODAY,
       items: [
@@ -303,7 +339,7 @@ describe("15. audit log", () => {
     expect(create.oldValues).toBeNull();
     expect(update.action).toBe("update");
     expect(update.method).toBe("individual");
-    expect(update.changedBy).toBe(actors.puneLucknow.id);
+    expect(update.changedBy).toBe(actors.ledUpcast.id);
     expect(update.changedByRole).toBe("operator");
     expect(update.oldValues?.checkInAt).toBe("2026-10-20T03:30:00.000Z");
     expect(update.newValues.checkInAt).toBe("2026-10-20T03:50:00.000Z");
@@ -311,8 +347,8 @@ describe("15. audit log", () => {
   });
 
   it("unchanged entries create no audit noise", async () => {
-    const op = ctxFor(store, actors.puneLucknow);
-    const [a] = (await puneRegister()).rows;
+    const op = ctxFor(store, actors.ledUpcast);
+    const [a] = (await ledRegister()).rows;
     const item = { workerId: a.workerId, status: "absent" as const, checkIn: null, checkOut: null, checkInSource: "entered" as const, method: "individual" as const };
     await saveAttendance(op, { projectId: "p2", contractorId: "c2", workDate: TODAY, items: [{ ...item, expectedVersion: null }] });
     const res = await saveAttendance(op, { projectId: "p2", contractorId: "c2", workDate: TODAY, items: [{ ...item, expectedVersion: 1 }] });
@@ -324,7 +360,7 @@ describe("15. audit log", () => {
 describe("overview", () => {
   it("answers the head-office questions", async () => {
     const o = await getOverview(ctxFor(store, actors.admin));
-    expect(o.cards.activeSites).toBe(5);
+    expect(o.cards.activeSites).toBe(4);
     expect(o.cards.contractors).toBe(4);
     expect(o.cards.activeWorkers).toBe(53);
     expect(o.cards.presentToday + o.cards.absentToday + o.cards.pendingToday).toBe(53);

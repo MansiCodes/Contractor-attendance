@@ -24,7 +24,7 @@ import { assertAdmin, headOfficeToday, type ServiceContext } from "./context";
 const MAX_PHOTO_BYTES = 2 * 1024 * 1024;
 const PHOTO_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
-/** "Today" at a site: its own local date. */
+/** "Today" at a plant: its own local date. */
 const siteToday = (ctx: ServiceContext, project: Project) => todayIn(project.timezone, ctx.now);
 
 async function getContractor(ctx: ServiceContext, contractorId: string): Promise<Contractor> {
@@ -35,7 +35,7 @@ async function getContractor(ctx: ServiceContext, contractorId: string): Promise
 
 async function getProject(ctx: ServiceContext, projectId: string): Promise<Project> {
   const p = (await ctx.store.listProjects()).find((x) => x.id === projectId);
-  if (!p) throw notFound("Project");
+  if (!p) throw notFound("Plant");
   return p;
 }
 
@@ -48,10 +48,10 @@ async function getWorker(ctx: ServiceContext, workerId: string): Promise<Worker>
 /** A worker can only be deployed where their contractor is assigned to the site. */
 async function assertContractorOnProject(ctx: ServiceContext, contractorId: string, projectId: string, date: string) {
   const project = await getProject(ctx, projectId);
-  if (!project.isActive) throw invalid("That project site is inactive");
+  if (!project.isActive) throw invalid("That plant is inactive");
   const cpas = await ctx.store.listContractorProjects();
   const ok = cpas.some((a) => a.contractorId === contractorId && a.projectId === projectId && assignmentCovers(a, date));
-  if (!ok) throw invalid("This contractor is not assigned to that project. Assign the contractor to the project first.");
+  if (!ok) throw invalid("This contractor is not assigned to that plant. Assign the contractor to the plant first.");
 }
 
 // ---------- contractors ----------
@@ -200,15 +200,26 @@ export async function createPaymentRule(ctx: ServiceContext, raw: unknown) {
   }
   const { allowBackdate: _ignored, ...fields } = input;
   void _ignored;
-  if (fields.rateType === "per_day") fields.hourRate = null;
-  else {
+  // Store only what applies, so a rule never carries a hidden, unused value.
+  if (fields.rateSource === "worker") {
     fields.dayRate = null;
-    fields.fullDayHours = null;
-    fields.halfDayHours = null;
+    fields.hourRate = null;
+  } else {
+    fields.monthlyDivisorDays = null;
+    if (fields.rateType === "per_day") fields.hourRate = null;
+    else {
+      fields.dayRate = null;
+      fields.halfDayHours = null;
+      fields.shortDayPolicy = null;
+    }
   }
+  if (fields.shortDayPolicy !== "half_day") fields.halfDayHours = null;
   if (!fields.overtimeEnabled) {
-    fields.overtimeAfterHours = null;
-    fields.overtimeHourRate = null;
+    Object.assign(fields, { overtimeAfterHours: null, overtimeAfterNightHours: null, overtimeRateMode: null, overtimeHourRate: null, overtimeMultiplier: null, overtimeRounding: null, overtimeMinMinutes: 0 });
+  } else if (fields.overtimeRateMode !== "per_hour") fields.overtimeHourRate = null;
+  if (fields.overtimeRateMode !== "multiplier") fields.overtimeMultiplier = null;
+  if (!fields.commissionEnabled) {
+    Object.assign(fields, { commissionPercent: null, commissionScope: null, commissionBase: null, commissionTreatment: null });
   }
   return ctx.store.createPaymentRule(fields, ctx.actor);
 }

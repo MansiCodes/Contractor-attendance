@@ -27,7 +27,7 @@ export async function GET(request: NextRequest) {
     const buffer = await buildAttendanceWorkbook(report, {
       generatedAt: `${now.date} ${now.time} (${tz})`,
       generatedBy: ctx.actor.fullName,
-      projectLabel: projects.find((p) => p.id === filter.projectId)?.name ?? "All projects",
+      projectLabel: projects.find((p) => p.id === filter.projectId)?.name ?? "All plants",
       contractorLabel: contractors.find((c) => c.id === filter.contractorId)?.name ?? "All contractors",
     });
     const filename = `attendance_${report.from}_to_${report.to}.xlsx`;

@@ -26,7 +26,7 @@ export interface WorkerRowProps {
   name: string;
   code: string;
   state: RowState;
-  /** the site's suggested IN time, or null when the site has none */
+  /** the plant's suggested IN time, or null when the plant has none */
   suggestedIn: string | null;
   editable: boolean;
   /** register date is today (a missing OUT is expected, not yet overdue) */
@@ -55,7 +55,7 @@ export const WorkerRow = memo(function WorkerRow(p: WorkerRowProps) {
   const isPending = s.status === "pending";
   const status = displayStatus(s, p.isToday);
   const needsOut = isPresent && !s.checkOut;
-  /** the site's suggestion is only shown where it can still be confirmed */
+  /** the plant's suggestion is only shown where it can still be confirmed */
   const suggested = isPending && p.editable && p.suggestedIn !== null;
   const needsIn = isPending && p.editable && p.suggestedIn === null;
   const notes = [

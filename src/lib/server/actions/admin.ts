@@ -1,6 +1,7 @@
 "use server";
 
 import * as admin from "../services/admin";
+import * as pay from "../services/pay";
 import { runAction } from "./run";
 
 export async function createContractorAction(input: unknown) {
@@ -59,4 +60,7 @@ export async function setOperatorAccessAction(input: unknown) {
 }
 export async function createPaymentRuleAction(input: unknown) {
   return runAction(async (ctx) => (await admin.createPaymentRule(ctx, input)).version);
+}
+export async function changeWorkerPayTermsAction(input: unknown) {
+  return runAction(async (ctx) => (await pay.changeWorkerPayTerms(ctx, input)).length);
 }

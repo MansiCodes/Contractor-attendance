@@ -1,5 +1,5 @@
 import { addDays, instantToLocal, isValidTime, localToInstantPg, localToInstantStrict, minutesBetween } from "./time";
-import type { AttendanceSnapshot, AttendanceStatus, CheckInSource } from "./types";
+import type { AttendanceSnapshot, AttendanceStatus, CheckInSource, Shift } from "./types";
 
 // Attendance policy: company-wide defaults with optional per-site overrides,
 // stored as append-only versions with an effective date. Pure functions only.
@@ -10,8 +10,10 @@ import type { AttendanceSnapshot, AttendanceStatus, CheckInSource } from "./type
 
 export const POLICY_FIELDS = [
   "suggestedCheckIn",
+  "nightSuggestedCheckIn",
   "shiftStart",
   "shiftEnd",
+  "breakMinutes",
   "allowOvernight",
   "inFutureToleranceMin",
   "outFutureToleranceMin",
@@ -39,9 +41,13 @@ const isRequired = (f: PolicyField) => (REQUIRED_POLICY_FIELDS as readonly Polic
 export interface PolicyValues {
   /** Shown for pending workers, "HH:mm". null = no suggestion; operators enter a time. Never proof of attendance. */
   suggestedCheckIn: string | null;
+  /** Suggested IN for the night shift, "HH:mm". null = no suggestion. Night shifts always allow an OUT on the next day. */
+  nightSuggestedCheckIn: string | null;
   /** Informational; shift start also anchors late labels. Set together with shiftEnd. */
   shiftStart: string | null;
   shiftEnd: string | null;
+  /** Break taken during the shift, in minutes. null = none. Not counted as worked time; pay still follows the contractor's payment rule. */
+  breakMinutes: number | null;
   /** OUT earlier than IN is treated as the next day. */
   allowOvernight: boolean;
   /** How far ahead of the clock an IN time may be recorded. */
@@ -96,8 +102,10 @@ export interface EffectivePolicy extends ResolvedPolicy {
 /** Used only where no company version is in force (the migration seeds one from 1900-01-01). */
 export const FALLBACK_POLICY: PolicyValues = {
   suggestedCheckIn: null,
+  nightSuggestedCheckIn: null,
   shiftStart: null,
   shiftEnd: null,
+  breakMinutes: null,
   allowOvernight: false,
   inFutureToleranceMin: 60,
   outFutureToleranceMin: 5,
@@ -149,6 +157,16 @@ export function resolvePolicy(versions: AttendancePolicyVersion[], projectId: st
     companyPolicyId: company?.id ?? null,
     sitePolicyId: site?.id ?? null,
   };
+}
+
+/**
+ * The policy as it applies to one shift. A night shift uses the night suggested IN,
+ * always allows OUT on the next day, and has no day-shift start/end (so no late
+ * label). Mirrored in SQL by attendance_before_write().
+ */
+export function policyForShift<T extends PolicyValues>(p: T, shift: Shift): T {
+  if (shift === "day") return p;
+  return { ...p, suggestedCheckIn: p.nightSuggestedCheckIn, allowOvernight: true, shiftStart: null, shiftEnd: null, lateGraceMin: null };
 }
 
 /** Timezone preselected for new sites: the company version in force on `date`. */
@@ -298,7 +316,7 @@ export function evaluateEntry(ctx: EntryContext, entry: EntryInput, previous: Pr
   } else {
     if (!entry.checkInSource) return { ok: false, field: "in", error: "Say whether the IN time was entered or the suggested time was accepted" };
     if (entry.checkInSource === "suggested" && ctx.dayPolicy.suggestedCheckIn !== entry.checkIn) {
-      return { ok: false, field: "in", error: "IN time does not match the site's suggested time" };
+      return { ok: false, field: "in", error: "IN time does not match the plant's suggested time" };
     }
     checkInSource = entry.checkInSource;
   }
@@ -320,6 +338,11 @@ export interface DayLabels {
 }
 
 export const NO_LABELS: DayLabels = { lateMinutes: null, halfDay: false, overtimeMinutes: null, notMarkedAbsent: false };
+
+/** Time worked between IN and OUT, less the plant's break (never below zero). */
+export function workedMinutes(policy: Pick<PolicyValues, "breakMinutes">, checkInAt: string, checkOutAt: string): number {
+  return Math.max(0, minutesBetween(checkInAt, checkOutAt) - (policy.breakMinutes ?? 0));
+}
 
 /**
  * Labels for one worker-day. `dayPolicy` is the policy in force on the work date;
@@ -347,7 +370,7 @@ export function dayLabels(
   let halfDay = false;
   let overtimeMinutes: number | null = null;
   if (record.checkOutAt) {
-    const worked = minutesBetween(record.checkInAt, record.checkOutAt);
+    const worked = workedMinutes(dayPolicy, record.checkInAt, record.checkOutAt);
     if (dayPolicy.halfDayBelowHours !== null && worked < Math.round(dayPolicy.halfDayBelowHours * 60)) halfDay = true;
     if (dayPolicy.overtimeAfterHours !== null) {
       const excess = worked - Math.round(dayPolicy.overtimeAfterHours * 60);

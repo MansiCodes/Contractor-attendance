@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { createContractorAction, updateContractorAction, uploadContractorPhotoAction } from "@/lib/server/actions/admin";
+import { setContractorIdentityAction } from "@/lib/server/actions/import";
 import { contractorInput } from "@/lib/domain/schemas";
 import { Field, ToggleRow, useServerAction } from "./form-bits";
 
@@ -49,7 +50,7 @@ export function AddContractorDialog() {
           <Field label="Contractor name" htmlFor="c-name" error={form.formState.errors.name?.message}>
             <Input id="c-name" autoComplete="off" {...form.register("name")} />
           </Field>
-          <Field label="Location" htmlFor="c-loc" hint="City, State" error={form.formState.errors.location?.message}>
+          <Field label="Location (optional)" htmlFor="c-loc" hint="City, State" error={form.formState.errors.location?.message}>
             <Input id="c-loc" autoComplete="off" {...form.register("location")} />
           </Field>
           <DialogFooter>
@@ -63,11 +64,11 @@ export function AddContractorDialog() {
   );
 }
 
-export function EditContractorDialog({ contractor }: { contractor: { id: string; name: string; location: string; isActive: boolean } }) {
+export function EditContractorDialog({ contractor }: { contractor: { id: string; name: string; location: string | null; isActive: boolean } }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(contractor.isActive);
   const { pending, run } = useServerAction();
-  const form = useForm<Values>({ resolver: zodResolver(contractorInput), defaultValues: { name: contractor.name, location: contractor.location } });
+  const form = useForm<Values>({ resolver: zodResolver(contractorInput), defaultValues: { name: contractor.name, location: contractor.location ?? "" } });
   const submit = form.handleSubmit((v) =>
     run(() => updateContractorAction(contractor.id, { ...v, isActive: active }), { success: "Contractor updated", onSuccess: () => setOpen(false) }),
   );
@@ -86,7 +87,7 @@ export function EditContractorDialog({ contractor }: { contractor: { id: string;
           <Field label="Contractor name" htmlFor="ce-name" error={form.formState.errors.name?.message}>
             <Input id="ce-name" {...form.register("name")} />
           </Field>
-          <Field label="Location" htmlFor="ce-loc" error={form.formState.errors.location?.message}>
+          <Field label="Location (optional)" htmlFor="ce-loc" error={form.formState.errors.location?.message}>
             <Input id="ce-loc" {...form.register("location")} />
           </Field>
           <ToggleRow label="Active" description="Inactive contractors are hidden from new assignments." checked={active} onCheckedChange={setActive} />
@@ -170,8 +171,8 @@ export function ContractorMenu({ contractorId, name }: { contractorId: string; n
           </Link>
         </DropdownMenuItem>
         <DropdownMenuItem asChild>
-          <Link href={`${base}?tab=sites`}>
-            <MapPin /> Sites
+          <Link href={`${base}?tab=plants`}>
+            <MapPin /> Plants
           </Link>
         </DropdownMenuItem>
         <DropdownMenuItem asChild>
@@ -181,5 +182,59 @@ export function ContractorMenu({ contractorId, name }: { contractorId: string; n
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/**
+ * Shown while a contractor's identity is unconfirmed (e.g. an imported wage sheet
+ * whose name and heading disagree). Confirming changes nothing but the status:
+ * contractors are never merged automatically.
+ */
+export function IdentityReviewBanner({ contractor }: { contractor: { id: string; name: string; legalName: string | null; identityNote: string | null } }) {
+  const [open, setOpen] = useState(false);
+  const [legalName, setLegalName] = useState(contractor.legalName ?? "");
+  const [note, setNote] = useState("");
+  const { pending, run } = useServerAction();
+  return (
+    <div className="flex flex-wrap items-start gap-3 rounded-xl border border-pending/30 bg-pending-soft p-4 text-sm" role="note" data-testid="identity-review">
+      <div className="min-w-0 flex-1">
+        <p className="font-semibold text-pending">Contractor identity needs review</p>
+        <p className="mt-0.5">{contractor.identityNote ?? "Confirm who this contractor is before relying on its records."}</p>
+      </div>
+      <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
+        Review
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Confirm {contractor.name}</DialogTitle>
+            <DialogDescription>
+              Confirm only after checking with the contractor or HR. If this is really a different contractor, leave it under review and correct the records instead. Nothing is merged.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <Field label="Legal name (as on their documents)" htmlFor="id-legal">
+              <Input id="id-legal" value={legalName} onChange={(e) => setLegalName(e.target.value)} />
+            </Field>
+            <Field label="How it was confirmed" htmlFor="id-note" hint="e.g. “Same firm – confirmed with HR on 24 Oct”">
+              <Input id="id-note" value={note} onChange={(e) => setNote(e.target.value)} />
+            </Field>
+          </div>
+          <DialogFooter>
+            <Button
+              disabled={pending || note.trim().length < 3}
+              onClick={() =>
+                run(() => setContractorIdentityAction(contractor.id, { identityStatus: "confirmed", legalName, identityNote: note }), {
+                  success: "Contractor identity confirmed",
+                  onSuccess: () => setOpen(false),
+                })
+              }
+            >
+              {pending && <Loader2 className="animate-spin" />} Confirm identity
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
   );
 }

@@ -14,7 +14,7 @@ import { lockedTimezones } from "@/lib/server/services/settings";
 import { deploymentOptions, workerSummaries } from "@/lib/server/services/directory";
 import { requirePageContext } from "@/lib/server/session";
 
-export const metadata: Metadata = { title: "Project" };
+export const metadata: Metadata = { title: "Plant" };
 
 type Params = Promise<{ id: string }>;
 
@@ -35,10 +35,10 @@ export default async function ProjectPage({ params }: { params: Params }) {
     <div className="space-y-8">
       <div className="space-y-3">
         <Link
-          href="/admin/projects"
+          href="/admin/plants"
           className="-ml-1.5 inline-flex h-8 items-center gap-0.5 rounded-md pr-2 pl-0.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
-          <ChevronLeft className="size-4" /> Projects
+          <ChevronLeft className="size-4" /> Plants
         </Link>
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div className="min-w-0">
@@ -57,7 +57,7 @@ export default async function ProjectPage({ params }: { params: Params }) {
       </div>
 
       <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:gap-6">
-        <Section title="Contractors at this site" description={`${activeCpas.length} assigned`}>
+        <Section title="Contractors at this plant" description={`${activeCpas.length} assigned`}>
           <Group as="ul">
             {activeCpas.length === 0 && <li className="px-4 py-3.5 text-sm text-muted-foreground">No contractors assigned yet.</li>}
             {activeCpas.map((a) => {
@@ -84,7 +84,7 @@ export default async function ProjectPage({ params }: { params: Params }) {
 
         <Section title="Operators" description="Who can record attendance here">
           <Group>
-            {operators.length === 0 && <p className="px-4 py-3.5 text-sm text-muted-foreground">No operators yet. Add them under Projects → Attendance operators.</p>}
+            {operators.length === 0 && <p className="px-4 py-3.5 text-sm text-muted-foreground">No operators yet. Add them under Plants → Plant attendance operators.</p>}
             {operators.map((u) => (
               <OperatorAccessToggle
                 key={u.id}
@@ -99,12 +99,12 @@ export default async function ProjectPage({ params }: { params: Params }) {
       </div>
 
       <Section
-        title="Workers at this site"
+        title="Workers at this plant"
         description={`${workers.length} assigned today`}
         actions={<AddWorkerDialog options={options} defaultProjectId={id} defaultContractorId={activeCpas[0]?.contractorId} />}
       >
         {workers.length === 0 ? (
-          <EmptyState title="No workers assigned" description="Add workers here, or transfer them from another site." />
+          <EmptyState title="No workers assigned" description="Add workers here, or transfer them from another plant." />
         ) : (
           <Group as="ul" className="md:grid md:grid-cols-2 md:divide-y-0 md:[&>li]:border-b md:[&>li:nth-child(odd)]:border-r">
             {workers.map((w) => (
@@ -122,7 +122,7 @@ export default async function ProjectPage({ params }: { params: Params }) {
         )}
       </Section>
 
-      <Section title="Site settings">
+      <Section title="Plant settings">
         <ProjectSettingsForm project={project} timezoneLocked={locked.includes(project.id)} />
       </Section>
     </div>

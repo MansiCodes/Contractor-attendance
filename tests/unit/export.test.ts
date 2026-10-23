@@ -61,6 +61,28 @@ describe("13. Excel export reconciles with the app", () => {
     expect(typeof g.getCell(11).value).toBe("number");
   });
 
+  it("adds a plant-wise sheet whose totals match the report and the contractor totals", async () => {
+    const store = freshStore();
+    const report = await getReport(ctxFor(store, actors.admin), { from: "2026-10-01", to: TODAY });
+    const buf = await buildAttendanceWorkbook(report, { generatedAt: "now", generatedBy: "test", projectLabel: "All plants", contractorLabel: "All contractors" });
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buf as unknown as ArrayBuffer);
+    expect(wb.worksheets.map((w) => w.name)).toEqual(["Summary", "Plant-wise", "Attendance"]);
+    const sheet = wb.getWorksheet("Plant-wise")!;
+    const header = (sheet.getRow(1).values as string[]).slice(1);
+    const col = (name: string) => header.indexOf(name) + 1;
+    expect(sheet.rowCount - 1).toBe(report.byProject.length);
+    let present = 0;
+    let amount = 0;
+    sheet.eachRow((row, i) => {
+      if (i === 1) return;
+      present += row.getCell(col("Present days")).value as number;
+      amount += (row.getCell(col("Estimated payable (₹)")).value as number | null) ?? 0;
+    });
+    expect(present).toBe(report.totals.presentDays);
+    expect(round2(amount)).toBe(report.totals.amount);
+  });
+
   it("leaves unconfigured payables blank (not zero) and says why", async () => {
     const store = freshStore();
     const report = await getReport(ctxFor(store, actors.admin), { from: "2026-10-01", to: TODAY, contractorId: "c4" });

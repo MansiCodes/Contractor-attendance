@@ -1,6 +1,6 @@
 # Attendance settings — design
 
-Status: implemented; revised after the Codex architecture/security review and the implementation review (2026-10-21). Nothing here is applied to any real database. Migrations run only in PGlite (`npm run test:db`) until the owner approves a live migration.
+Status: implemented; revised after the Codex architecture/security review and the implementation review (2026-10-21). Adapted to manufacturing plants and given a plant break setting (migration `20261023000001_manufacturing_plants`). Nothing here is applied to any real database. Migrations run only in PGlite (`npm run test:db`) until the owner approves a live migration.
 
 ## Why
 
@@ -92,11 +92,11 @@ The result carries the company and site version ids, so the register can detect 
 
 ## Labels (computed, never stored, never affect pay)
 
-From the work-date policy, for present records, using gross IN→OUT minutes (unpaid breaks belong to payment rules):
+From the work-date policy, for present records, using worked minutes: IN→OUT less the plant's `break_minutes` (if set). Payable hours are separate: they still use each contractor's payment rule, including its own unpaid break.
 
 - **Late**: shift start and late grace set; shift start is anchored to the work date first; late if IN − shift start > grace. Shown as minutes after shift start (including grace).
-- **Half day**: complete and gross minutes < `half_day_below_hours × 60`.
-- **Overtime**: complete, excess = gross − `overtime_after_hours × 60` > 0 and ≥ `overtime_min_minutes`. Shown as excess minutes.
+- **Half day**: complete and worked minutes < `half_day_below_hours × 60`.
+- **Overtime**: complete, excess = worked − `overtime_after_hours × 60` > 0 and ≥ `overtime_min_minutes`. Shown as excess minutes.
 - **Absent – not marked**: no record or pending, auto-absent on (work-date policy), and the authoritative operator window has closed. Counted separately from pending and from marked absences; not a stored status.
 - **Shift end** is informational: shown with the shift and used to prefill OUT pickers. It does not drive overtime.
 
@@ -106,6 +106,12 @@ From the work-date policy, for present records, using gross IN→OUT minutes (un
 - A version is a complete snapshot. The form asks for the start date first and loads the settings in force on that date (including scheduled versions), so saving never silently drops a scheduled override. It lists later versions that will still take over, and needs explicit confirmation for a start date in the past.
 - "Company default" on a site field previews the company value in force on that date.
 - Sites show warnings for allowed-but-risky combinations (overnight with today-only editing; a same-day cutoff; late grace without a shift start).
+
+## Manufacturing plants (2026-10-23)
+
+- The app serves contractor labour inside the company's manufacturing plants. "Projects" in the schema and code are plants; table, column and type names are unchanged, and every name users see says plant.
+- `break_minutes` (0–240, null = none) is a company default with optional plant overrides, like every other field. It reduces the worked time shown on the register and used for half-day and overtime labels. It never changes payables.
+- The migration also re-creates the functions whose user-visible messages mentioned "project" or "site", with only the wording changed. Existing policy, attendance and audit rows are untouched (staged upgrade test).
 
 ## Known limits (not changed here)
 

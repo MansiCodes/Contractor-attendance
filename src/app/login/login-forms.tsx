@@ -12,7 +12,7 @@ import { Label } from "@/components/ui/label";
 import { demoLoginAction, loginAction } from "@/lib/server/actions/auth";
 import { cn } from "@/lib/utils";
 
-type DemoUser = { id: string; name: string; role: "admin" | "operator"; sites: string[] };
+type DemoUser = { id: string; name: string; role: "admin" | "operator"; plants: string[] };
 
 export function DemoLogin({ users }: { users: DemoUser[] }) {
   const [busy, start] = useTransition();
@@ -25,7 +25,7 @@ export function DemoLogin({ users }: { users: DemoUser[] }) {
     });
   };
   const groups: { title: string; users: DemoUser[] }[] = [
-    { title: "Site operators", users: users.filter((u) => u.role === "operator") },
+    { title: "Plant attendance operators", users: users.filter((u) => u.role === "operator") },
     { title: "Head office", users: users.filter((u) => u.role === "admin") },
   ];
   return (
@@ -55,7 +55,7 @@ export function DemoLogin({ users }: { users: DemoUser[] }) {
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-md font-semibold">{u.name}</span>
                     <span className="block truncate text-sm text-muted-foreground">
-                      {u.role === "admin" ? "All sites, reports and setup" : u.sites.join(" · ") || "No sites yet"}
+                      {u.role === "admin" ? "All plants, reports and setup" : u.plants.join(" · ") || "No plants yet"}
                     </span>
                   </span>
                   {busy && chosen === u.id ? (

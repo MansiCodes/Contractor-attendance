@@ -13,15 +13,15 @@ const count = async (page: Page, key: string) => Number(await page.getByTestId(`
 
 test.describe.configure({ mode: "serial" });
 
-test("operator sees only their sites and only operator navigation", async ({ page }) => {
-  await loginAs(page, "demo-op-pune-lucknow");
+test("operator sees only their plants and only operator navigation", async ({ page }) => {
+  await loginAs(page, "demo-op-led-upcast");
   await expect(page.getByTestId("demo-banner")).toBeVisible();
   await expect(page.getByTestId("register-date")).toContainText("Today");
   const options = await page.getByTestId("project-select").locator("option").allInnerTexts();
   expect(options).toHaveLength(2);
-  expect(options.join(" ")).toMatch(/Pune/);
-  expect(options.join(" ")).toMatch(/Lucknow/);
-  expect(options.join(" ")).not.toMatch(/Jaipur|Guwahati|Bhubaneswar/);
+  expect(options.join(" ")).toMatch(/LED Rope Light Plant/);
+  expect(options.join(" ")).toMatch(/Upcast Plant/);
+  expect(options.join(" ")).not.toMatch(/PVC|Quad/);
   const nav = page.locator("nav").last();
   await expect(nav.getByRole("link", { name: "Attendance" })).toBeVisible();
   await expect(nav.getByRole("link", { name: "History" })).toBeVisible();
@@ -35,7 +35,7 @@ test("operator sees only their sites and only operator navigation", async ({ pag
 });
 
 test("everyone starts pending; confirm, edit IN, mark absent, record OUT and save", async ({ page }) => {
-  await loginAs(page, "demo-op-pune-lucknow");
+  await loginAs(page, "demo-op-led-upcast");
   await page.getByTestId("contractor-select").selectOption({ label: "Pragati Manpower (Demo) (7)" });
   await page.waitForURL(/contractor=c2/);
   await expect(page.getByTestId("worker-row")).toHaveCount(7);
@@ -91,8 +91,8 @@ test("everyone starts pending; confirm, edit IN, mark absent, record OUT and sav
 });
 
 test("bulk confirmation, unsaved changes survive a reload, then save", async ({ page }) => {
-  await loginAs(page, "demo-op-pune-lucknow");
-  await page.getByTestId("project-select").selectOption({ label: "Smart Street Lighting Works (Demo) — Lucknow, Uttar Pradesh" });
+  await loginAs(page, "demo-op-led-upcast");
+  await page.getByTestId("project-select").selectOption({ label: "Upcast Plant (Demo) — Unit 3 (Demo)" });
   await page.waitForURL(/project=p3/);
   const total = await count(page, "all");
   expect(await count(page, "pending")).toBe(total);
@@ -113,7 +113,7 @@ test("bulk confirmation, unsaved changes survive a reload, then save", async ({ 
 });
 
 test("history lists past days read-only for operators", async ({ page }) => {
-  await loginAs(page, "demo-op-pune-lucknow");
+  await loginAs(page, "demo-op-led-upcast");
   await page.getByRole("link", { name: "History" }).last().click();
   await page.waitForURL("**/history");
   // The last entry is the oldest day in the list (never today).
@@ -123,10 +123,10 @@ test("history lists past days read-only for operators", async ({ page }) => {
   await expect(page.getByTestId("present-button").first()).toBeDisabled();
 });
 
-test("a site without a suggested time asks for the IN time, one by one or in bulk", async ({ page }) => {
-  await loginAs(page, "demo-op-east");
-  await page.getByTestId("project-select").selectOption({ label: "Water Treatment Plant Fire Systems (Demo) — Guwahati, Assam" });
-  await page.waitForURL(/project=p4/);
+test("a plant without a suggested time asks for the IN time, one by one or in bulk", async ({ page }) => {
+  // This operator has one plant (Quad & Signalling), which keeps the company default: no suggested time.
+  await loginAs(page, "demo-op-quad");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Quad & Signalling Plant (Demo)");
   const total = await count(page, "all");
   expect(await count(page, "pending")).toBe(total);
   // No time is assumed: the IN slot asks to be set.
@@ -150,4 +150,20 @@ test("a site without a suggested time asks for the IN time, one by one or in bul
 
   await page.getByTestId("save-button").click();
   await expect(page.getByText(`${total} changes saved`)).toBeVisible();
+});
+
+test("night shift: its own suggested IN, and the day register stays separate", async ({ page }) => {
+  await loginAs(page, "demo-op-led-upcast");
+  await page.getByTestId("project-select").selectOption({ label: "Upcast Plant (Demo) — Unit 3 (Demo)" });
+  await page.waitForURL(/project=p3/);
+  await page.getByTestId("contractor-select").selectOption({ index: 0 });
+  await page.getByTestId("shift-night").click();
+  await page.waitForURL(/shift=night/);
+  await expect(page.getByTestId("register")).toHaveAttribute("data-suggested-in", "21:00");
+  await page.getByTestId("shift-day").click();
+  await page.waitForURL((u) => !u.search.includes("shift=night"));
+  await expect(page.getByTestId("register")).toHaveAttribute("data-suggested-in", "09:00");
+  // Phone width: nothing overflows sideways.
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(0);
 });

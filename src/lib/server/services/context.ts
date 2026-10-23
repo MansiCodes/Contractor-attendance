@@ -75,8 +75,8 @@ export async function assertProjectAccess(ctx: ServiceContext, projectId: string
   const projects = await accessibleProjects(ctx);
   const project = projects.find((p) => p.id === projectId);
   if (!project) {
-    if (ctx.actor.role === "admin") throw notFound("Project");
-    throw forbidden("You are not authorised for this project site");
+    if (ctx.actor.role === "admin") throw notFound("Plant");
+    throw forbidden("You are not authorised for this plant");
   }
   return project;
 }

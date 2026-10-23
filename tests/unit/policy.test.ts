@@ -8,6 +8,7 @@ import {
   type AttendancePolicyVersion,
   type EntryContext,
   type PolicyValues,
+  workedMinutes,
 } from "@/lib/domain/policy";
 import { localToInstant, localToInstantPg, localToInstantStrict, todayIn } from "@/lib/domain/time";
 
@@ -222,6 +223,27 @@ describe("evaluateEntry: one check for every entry path", () => {
     const fold = { ...ny, workDate: "2026-11-01", now: new Date("2026-11-02T00:00:00Z") };
     expect(evaluateEntry(fold, present("01:30"), null)).toMatchObject({ ok: false, error: /happens twice/ });
     expect(evaluateEntry(fold, present("08:00", "17:00"), null).ok).toBe(true);
+  });
+});
+
+describe("plant break (attendance only)", () => {
+  it("is not counted as worked time, for the register and for labels", () => {
+    const at = (t: string) => iso("2026-10-20", t);
+    expect(workedMinutes({ breakMinutes: null }, at("09:00"), at("17:30"))).toBe(510);
+    expect(workedMinutes({ breakMinutes: 30 }, at("09:00"), at("17:30"))).toBe(480);
+    expect(workedMinutes({ breakMinutes: 60 }, at("09:00"), at("09:30"))).toBe(0); // never negative
+    const policy: PolicyValues = { ...FALLBACK_POLICY, halfDayBelowHours: 4, overtimeAfterHours: 8, breakMinutes: 30 };
+    const rec = (inT: string, outT: string) => ({ status: "present" as const, checkInAt: at(inT), checkOutAt: at(outT) });
+    expect(dayLabels(policy, rec("09:00", "13:15"), "2026-10-20", IST, false).halfDay).toBe(true); // 4h15 − 30 min < 4h
+    expect(dayLabels({ ...policy, breakMinutes: null }, rec("09:00", "13:15"), "2026-10-20", IST, false).halfDay).toBe(false);
+    expect(dayLabels(policy, rec("09:00", "18:00"), "2026-10-20", IST, false).overtimeMinutes).toBe(30); // 9h − 30 min − 8h
+  });
+
+  it("a plant can override the company break, including to none", () => {
+    const company = version(null, "1900-01-01", { breakMinutes: 45 });
+    const plant = version("p1", "1900-01-01", { overridden: ["breakMinutes"], breakMinutes: null });
+    expect(resolvePolicy([company], "p2", "2026-10-20").breakMinutes).toBe(45);
+    expect(resolvePolicy([company, plant], "p1", "2026-10-20").breakMinutes).toBeNull();
   });
 });
 

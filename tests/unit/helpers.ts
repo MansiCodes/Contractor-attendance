@@ -9,9 +9,9 @@ export const TODAY = "2026-10-20";
 
 export const actors = {
   admin: { id: DEMO_USERS.admin, role: "admin", fullName: "Demo Admin", email: "admin@demo.invalid" } satisfies Actor,
-  jaipur: { id: DEMO_USERS.jaipur, role: "operator", fullName: "Op Jaipur", email: "j@demo.invalid" } satisfies Actor,
-  puneLucknow: { id: DEMO_USERS.puneLucknow, role: "operator", fullName: "Op Pune", email: "p@demo.invalid" } satisfies Actor,
-  east: { id: DEMO_USERS.east, role: "operator", fullName: "Op East", email: "e@demo.invalid" } satisfies Actor,
+  pvc: { id: DEMO_USERS.pvc, role: "operator", fullName: "Op PVC", email: "pvc@demo.invalid" } satisfies Actor,
+  ledUpcast: { id: DEMO_USERS.ledUpcast, role: "operator", fullName: "Op LED & Upcast", email: "led@demo.invalid" } satisfies Actor,
+  quad: { id: DEMO_USERS.quad, role: "operator", fullName: "Op Quad", email: "quad@demo.invalid" } satisfies Actor,
 };
 
 export function freshStore() {

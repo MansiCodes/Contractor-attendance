@@ -36,8 +36,11 @@ export function workerSummaries(dir: Directory, filter: { contractorId?: string;
       return {
         id: w.id,
         code: w.code,
+        employeeCode: w.employeeCode,
         fullName: w.fullName,
         contractorId: w.contractorId,
+        department: w.department,
+        designation: w.designation,
         isActive: w.isActive,
         phone: w.phone,
         notes: w.notes,

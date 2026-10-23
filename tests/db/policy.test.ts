@@ -66,7 +66,9 @@ describe("upgrade from the original schema", () => {
 
     const after = await rows<Record<string, unknown>>(db, `select * from public.attendance_records order by id`);
     // Identical apart from the new (empty) column.
-    expect(after.map((r) => Object.fromEntries(Object.entries(r).filter(([k]) => k !== "check_in_source")))).toEqual(before.attendance);
+    // Identical apart from columns added later (empty or defaulted: the shift of old records is "day").
+    expect(after.map((r) => Object.fromEntries(Object.entries(r).filter(([k]) => k !== "check_in_source" && k !== "shift")))).toEqual(before.attendance);
+    expect(after.every((r) => r.shift === "day")).toBe(true);
     expect(await rows(db, `select * from public.attendance_audit_logs order by id`)).toEqual(before.audit);
     expect((await one<{ s: string | null }>(db, `select check_in_source::text as s from public.attendance_records`)).s).toBeNull();
 
@@ -244,8 +246,8 @@ describe("policies on a fresh database", () => {
       asUser(db, s.other, () =>
         db.query(`insert into public.attendance_records (worker_id, project_id, contractor_id, work_date, status, check_in_at, check_in_source) values ($1, $2, $3, $4, 'present', now() - interval '1 hour', 'suggested')`, [worker, s.siteA, s.contractor, d]),
       );
-    await expectError(probe(s.worker), /^forbidden: you are not allowed to edit attendance for this site and date$/);
-    await expectError(probe(s.workerB), /^forbidden: you are not allowed to edit attendance for this site and date$/);
+    await expectError(probe(s.worker), /^forbidden: you are not allowed to edit attendance for this plant and date$/);
+    await expectError(probe(s.workerB), /^forbidden: you are not allowed to edit attendance for this plant and date$/);
   });
 
   it("refuses IN/OUT times that happen twice on a DST date, like the app does", async () => {
@@ -280,6 +282,60 @@ describe("policies on a fresh database", () => {
   });
 });
 
+describe("manufacturing plants migration", () => {
+  const PLANTS = "20261022000002"; // last migration before the manufacturing plants change
+
+  it("keeps existing settings and attendance exactly as they were", async () => {
+    const db = await createDb({ until: PLANTS });
+    const s = await seedBasics(db);
+    await asUser(db, s.admin, () =>
+      db.query(`insert into public.attendance_policies (project_id, effective_from, overridden, suggested_check_in) values ($1, '2026-01-01', '{suggested_check_in}', '08:15')`, [s.siteA]),
+    );
+    const before = await rows(db, `select * from public.attendance_policies order by created_at, id`);
+    const resolvedBefore = await one(db, `select (public.attendance_policy_resolve($1, current_date)).* `, [s.siteA]);
+
+    await applyMigrations(db, { after: PLANTS });
+
+    const after = await rows<Record<string, unknown>>(db, `select * from public.attendance_policies order by created_at, id`);
+    expect(after.map((r) => Object.fromEntries(Object.entries(r).filter(([k]) => k !== "break_minutes" && k !== "night_suggested_check_in")))).toEqual(before);
+    expect(after.every((r) => r.break_minutes === null)).toBe(true);
+    const resolvedAfter = await one<Record<string, unknown>>(db, `select (public.attendance_policy_resolve($1, current_date)).*`, [s.siteA]);
+    expect({ ...resolvedAfter, break_minutes: undefined, night_suggested_check_in: undefined }).toEqual({ ...resolvedBefore, break_minutes: undefined });
+    expect(resolvedAfter.break_minutes).toBeNull();
+    expect(resolvedAfter.night_suggested_check_in).toBeNull();
+  });
+
+  it("stores a plant break as an admin-only, per-plant override", async () => {
+    const db = await createDb();
+    const s = await seedBasics(db);
+    const add = (cols: Record<string, unknown>) => {
+      const keys = Object.keys(cols);
+      return db.query(`insert into public.attendance_policies (${keys.join(", ")}) values (${keys.map((_, i) => `$${i + 1}`).join(", ")})`, keys.map((k) => cols[k]));
+    };
+    await asUser(db, s.admin, async () => {
+      await add({ project_id: s.siteA, effective_from: "2026-01-01", overridden: ["break_minutes"], break_minutes: 30 });
+      await expectError(add({ project_id: s.siteB, effective_from: "2026-01-01", break_minutes: 30 }), /check constraint/); // value without override
+      await expectError(add({ project_id: s.siteB, effective_from: "2026-01-01", overridden: ["break_minutes"], break_minutes: 500 }), /check constraint/);
+    });
+    await asUser(db, s.op, async () => {
+      await expectError(add({ project_id: s.siteA, effective_from: "2026-02-01", overridden: ["break_minutes"], break_minutes: 0 }), /forbidden/);
+      expect((await one<{ b: number }>(db, `select (public.attendance_policy_for($1, current_date)).break_minutes as b`, [s.siteA])).b).toBe(30);
+    });
+    expect((await one<{ b: number | null }>(db, `select (public.attendance_policy_resolve($1, current_date)).break_minutes as b`, [s.siteB])).b).toBeNull();
+  });
+
+  it("says plant, not project or site, in errors users can see", async () => {
+    const db = await createDb();
+    const s = await seedBasics(db);
+    await asUser(db, s.admin, async () => {
+      // The contractor is not assigned to this new plant.
+      const plant = (await one<{ id: string }>(db, `insert into public.projects (name, location) values ('New Plant', 'Unit 9') returning id`)).id;
+      await expectError(db.query(`select public.admin_create_worker('Test Worker', $1, $2, '2026-01-01')`, [s.contractor, plant]), /not assigned to that plant/);
+    });
+    await asUser(db, s.other, () => expectError(db.query(`select public.attendance_policy_for($1, current_date)`, [s.siteA]), /not authorised for this plant/));
+  });
+});
+
 describe("TypeScript and SQL agree", () => {
   it("on resolution and the edit window, including DST transitions", async () => {
     const db = await createDb();
@@ -293,10 +349,10 @@ describe("TypeScript and SQL agree", () => {
         const keys = Object.keys(cols);
         await db.query(`insert into public.attendance_policies (${keys.join(", ")}) values (${keys.map((_, i) => `$${i + 1}`).join(", ")})`, keys.map((k) => cols[k]));
       };
-      await add({ effective_from: "2026-06-01", suggested_check_in: "08:00", allow_overnight: false, in_future_tolerance_min: 45, out_future_tolerance_min: 2, operator_backdate_days: 1, auto_absent_enabled: true, edit_cutoff_time: "01:30", default_timezone: "Asia/Kolkata" });
+      await add({ effective_from: "2026-06-01", suggested_check_in: "08:00", break_minutes: 45, allow_overnight: false, in_future_tolerance_min: 45, out_future_tolerance_min: 2, operator_backdate_days: 1, auto_absent_enabled: true, edit_cutoff_time: "01:30", default_timezone: "Asia/Kolkata" });
       await add({ project_id: ny, effective_from: "2026-03-01", overridden: ["edit_cutoff_time", "operator_backdate_days"], edit_cutoff_time: "02:30", operator_backdate_days: 0 });
-      await add({ project_id: ny, effective_from: "2026-10-01", overridden: ["suggested_check_in", "shift_start", "shift_end"], suggested_check_in: null, shift_start: "22:00", shift_end: "06:00" });
-      await add({ project_id: ktm, effective_from: "2026-06-01", overridden: ["half_day_below_hours", "overtime_after_hours"], half_day_below_hours: 4.5, overtime_after_hours: 9.25 });
+      await add({ project_id: ny, effective_from: "2026-10-01", overridden: ["suggested_check_in", "shift_start", "shift_end", "break_minutes"], suggested_check_in: null, shift_start: "22:00", shift_end: "06:00", break_minutes: null });
+      await add({ project_id: ktm, effective_from: "2026-06-01", overridden: ["half_day_below_hours", "overtime_after_hours", "break_minutes", "night_suggested_check_in"], half_day_below_hours: 4.5, overtime_after_hours: 9.25, break_minutes: 30, night_suggested_check_in: "20:30" });
       return { ny, ktm };
     });
     const { ny, ktm } = ids;
@@ -308,14 +364,16 @@ describe("TypeScript and SQL agree", () => {
           const sql = await one<Record<string, unknown>>(db, `select (r).* from (select public.attendance_policy_resolve($1, $2::date) as r) x`, [projectId, date]);
           const ts = resolvePolicy(versions, projectId, date);
           expect({
-            suggestedCheckIn: ts.suggestedCheckIn, shiftStart: ts.shiftStart, allowOvernight: ts.allowOvernight,
+            suggestedCheckIn: ts.suggestedCheckIn, nightSuggestedCheckIn: ts.nightSuggestedCheckIn, shiftStart: ts.shiftStart, breakMinutes: ts.breakMinutes, allowOvernight: ts.allowOvernight,
             inFutureToleranceMin: ts.inFutureToleranceMin, outFutureToleranceMin: ts.outFutureToleranceMin,
             halfDayBelowHours: ts.halfDayBelowHours, overtimeAfterHours: ts.overtimeAfterHours,
             operatorBackdateDays: ts.operatorBackdateDays, editCutoffTime: ts.editCutoffTime, autoAbsentEnabled: ts.autoAbsentEnabled,
             companyPolicyId: ts.companyPolicyId, sitePolicyId: ts.sitePolicyId,
           }).toEqual({
             suggestedCheckIn: sql.suggested_check_in ? String(sql.suggested_check_in).slice(0, 5) : null,
+            nightSuggestedCheckIn: sql.night_suggested_check_in ? String(sql.night_suggested_check_in).slice(0, 5) : null,
             shiftStart: sql.shift_start ? String(sql.shift_start).slice(0, 5) : null,
+            breakMinutes: sql.break_minutes,
             allowOvernight: sql.allow_overnight,
             inFutureToleranceMin: sql.in_future_tolerance_min,
             outFutureToleranceMin: sql.out_future_tolerance_min,

@@ -7,12 +7,12 @@ import { requirePageContext } from "@/lib/server/session";
 
 export const metadata: Metadata = { title: "Day register" };
 
-type Search = Promise<{ project?: string; contractor?: string; date?: string }>;
+type Search = Promise<{ project?: string; contractor?: string; date?: string; shift?: string }>;
 
 export default async function HistoryDayPage({ searchParams }: { searchParams: Search }) {
   const ctx = await requirePageContext("operator");
   const sp = await searchParams;
-  const view = await loadRegister(ctx, { projectId: sp.project, contractorId: sp.contractor, date: sp.date });
+  const view = await loadRegister(ctx, { projectId: sp.project, contractorId: sp.contractor, date: sp.date, shift: sp.shift });
   return (
     <div className="space-y-3">
       <Link
@@ -22,7 +22,7 @@ export default async function HistoryDayPage({ searchParams }: { searchParams: S
         <ChevronLeft className="size-4" /> History
       </Link>
       <AttendanceRegister
-        key={`${view.project?.id}:${view.contractorId}:${view.date}`}
+        key={`${view.project?.id}:${view.contractorId}:${view.date}:${view.shift}`}
         view={view}
         basePath="/history/day"
         allowDateChange

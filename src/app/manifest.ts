@@ -4,7 +4,7 @@ export default function manifest(): MetadataRoute.Manifest {
   return {
     name: "NF Attendance Register",
     short_name: "NF Attendance",
-    description: "Contractor labour attendance register for NF project sites",
+    description: "Plant labour attendance register for contractor workers in our manufacturing plants",
     start_url: "/",
     display: "standalone",
     background_color: "#ffffff",

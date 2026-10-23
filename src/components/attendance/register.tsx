@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { CalendarDays, Check, CheckCheck, ChevronLeft, ChevronRight, ChevronsUpDown, Clock, Info, Loader2, Lock, Search, SearchX, Users, X } from "lucide-react";
+import { CalendarDays, Check, CheckCheck, ChevronLeft, ChevronRight, ChevronsUpDown, Clock, Info, Loader2, Lock, Moon, Search, SearchX, Sun, Users, X } from "lucide-react";
 import { toast } from "sonner";
 import {
   AlertDialog,
@@ -19,9 +19,9 @@ import { ContractorAvatar } from "@/components/contractor-avatar";
 import { AttendanceBar, EmptyState } from "@/components/kit";
 import { saveAttendanceAction } from "@/lib/server/actions/attendance";
 import type { RegisterView, SavedEntryDTO } from "@/lib/server/services/attendance";
-import { dayLabels, evaluateEntry, FALLBACK_POLICY, FALLBACK_TIMEZONE, NO_LABELS, type EntryInput, type PreviousEntry } from "@/lib/domain/policy";
-import { addDays, formatDateHeading, formatTime12, minutesBetween, nowTimeIn, roundTimeTo, shiftTime } from "@/lib/domain/time";
-import type { AttendanceStatus, ChangeMethod, CheckInSource } from "@/lib/domain/types";
+import { dayLabels, evaluateEntry, FALLBACK_POLICY, FALLBACK_TIMEZONE, NO_LABELS, workedMinutes as workedFor, type EntryInput, type PreviousEntry } from "@/lib/domain/policy";
+import { addDays, formatDateHeading, formatTime12, nowTimeIn, roundTimeTo, shiftTime } from "@/lib/domain/time";
+import type { AttendanceStatus, ChangeMethod, CheckInSource, Shift } from "@/lib/domain/types";
 import { cn } from "@/lib/utils";
 import { TimeSheet } from "./time-sheet";
 import { ROW_GRID, WorkerRow, type RowState } from "./worker-row";
@@ -30,7 +30,7 @@ interface Draft {
   status: AttendanceStatus;
   checkIn: string | null;
   checkOut: string | null;
-  /** "suggested" only when the site's suggested IN was accepted unchanged */
+  /** "suggested" only when the plant's suggested IN was accepted unchanged */
   checkInSource: CheckInSource | null;
   method: ChangeMethod;
   /** version of the saved record when editing started (null = no record yet) */
@@ -79,7 +79,7 @@ export interface AttendanceRegisterProps {
 export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery, heading = "Attendance" }: AttendanceRegisterProps) {
   const router = useRouter();
   const project = view.project;
-  const storageKey = project && view.contractorId ? `nf-att:v2:${project.id}:${view.contractorId}:${view.date}` : null;
+  const storageKey = project && view.contractorId ? `nf-att:v3:${project.id}:${view.contractorId}:${view.date}:${view.shift}` : null;
 
   const stored = useSyncExternalStore(
     subscribeStorage,
@@ -284,7 +284,7 @@ export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery
       let labels = NO_LABELS;
       const v = status === "present" && checkIn ? check(row.workerId, { status, checkIn, checkOut, checkInSource: checkInSource ?? "entered" }, DISPLAY_NOW) : null;
       if (v?.ok && v.checkInAt) {
-        if (v.checkOutAt) workedMinutes = minutesBetween(v.checkInAt, v.checkOutAt);
+        if (v.checkOutAt) workedMinutes = workedFor(day, v.checkInAt, v.checkOutAt); // less the plant break, if any
         checkOutNextDay = v.checkOutNextDay;
         labels = dayLabels(day, { status, checkInAt: v.checkInAt, checkOutAt: v.checkOutAt }, view.date, tz, windowClosed);
       } else if (status === "pending") {
@@ -326,7 +326,7 @@ export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery
     return rows.filter(
       ({ row, state }) =>
         (filter === "all" || state.status === filter || touched.has(row.workerId)) &&
-        (!q || row.workerName.toLowerCase().includes(q) || row.workerCode.toLowerCase().includes(q)),
+        (!q || row.workerName.toLowerCase().includes(q) || row.workerCode.toLowerCase().includes(q) || (row.employeeCode ?? "").toLowerCase().includes(q)),
     );
   }, [rows, filter, query, touched]);
 
@@ -421,7 +421,7 @@ export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery
     }));
     startSaving(async () => {
       const res = await saveAttendanceAction({
-        projectId: project.id, contractorId: view.contractorId, workDate: view.date, items, policyToken: view.policy?.token,
+        projectId: project.id, contractorId: view.contractorId, workDate: view.date, shift: view.shift, items, policyToken: view.policy?.token,
       });
       if (!res.ok) {
         if (res.code === "stale_settings") {
@@ -458,7 +458,7 @@ export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery
   // ---- navigation between project / contractor / date ----
   const navigate = (patch: Record<string, string>) => {
     const params = new URLSearchParams({ ...extraQuery });
-    const next = { project: project?.id ?? "", contractor: view.contractorId ?? "", date: view.date, ...patch };
+    const next = { project: project?.id ?? "", contractor: view.contractorId ?? "", date: view.date, shift: view.shift === "night" ? "night" : "", ...patch };
     if (patch.project && patch.project !== project?.id) next.contractor = "";
     for (const [k, v] of Object.entries(next)) if (v) params.set(k, v);
     startNavigating(() => router.push(`${basePath}?${params.toString()}`));
@@ -481,7 +481,7 @@ export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery
   const earliestMissingIn = outMissingIds.map((id) => stateOf(id).checkIn).filter((t): t is string => !!t).sort()[0] ?? null;
 
   if (!project) {
-    return <EmptyState icon={Lock} title="No project sites yet" description={view.readOnlyReason ?? "No project sites available."} />;
+    return <EmptyState icon={Lock} title="No plants yet" description={view.readOnlyReason ?? "No plants available."} />;
   }
 
   const contractor = view.contractors.find((c) => c.id === view.contractorId) ?? null;
@@ -491,7 +491,7 @@ export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery
 
   return (
     <section aria-label={heading} className={cn("space-y-4", dirtyCount > 0 && "pb-24")} data-testid="register" data-suggested-in={suggestedIn ?? ""}>
-      {/* ---------- Header: date, project, contractor ---------- */}
+      {/* ---------- Header: date, plant, contractor ---------- */}
       <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,22rem)] md:items-end md:gap-8">
         <div className="min-w-0">
           <div className="flex min-h-9 items-center justify-between gap-2">
@@ -529,7 +529,7 @@ export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery
             )}
           </div>
 
-          {/* Project: a heading that is also a native picker (fast and familiar on phones) */}
+          {/* Plant: a heading that is also a native picker (fast and familiar on phones) */}
           <div className="relative mt-1 rounded-lg has-[select:focus-visible]:ring-2 has-[select:focus-visible]:ring-ring">
             <h1 className="flex items-start gap-1.5 text-title font-semibold text-balance">
               <span className="min-w-0">{project.name}</span>
@@ -539,7 +539,7 @@ export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery
               data-testid="project-select"
               value={project.id}
               onChange={(e) => requestNavigate({ project: e.target.value })}
-              aria-label="Project site"
+              aria-label="Plant"
               className={cn("absolute inset-0 w-full appearance-none opacity-0", view.projects.length > 1 ? "cursor-pointer" : "cursor-default")}
             >
               {view.projects.map((p) => (
@@ -570,9 +570,9 @@ export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery
             <div className="tabular text-2xs leading-4 font-medium text-muted-foreground">
               Contractor
               {contractor && ` · ${contractor.workerCount} ${contractor.workerCount === 1 ? "worker" : "workers"}`}
-              {view.contractors.length > 1 && ` · ${view.contractors.length} at this site`}
+              {view.contractors.length > 1 && ` · ${view.contractors.length} at this plant`}
             </div>
-            <div className="truncate text-md leading-5 font-semibold">{contractor?.name ?? "No contractors at this site"}</div>
+            <div className="truncate text-md leading-5 font-semibold">{contractor?.name ?? "No contractors at this plant"}</div>
           </div>
           {view.contractors.length > 1 && <ChevronsUpDown className="size-4 shrink-0 text-muted-foreground" />}
           <select
@@ -583,7 +583,7 @@ export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery
             aria-label="Contractor"
             className={cn("absolute inset-0 w-full appearance-none opacity-0", view.contractors.length > 1 ? "cursor-pointer" : "cursor-default")}
           >
-            {view.contractors.length === 0 && <option value="">No contractors at this site</option>}
+            {view.contractors.length === 0 && <option value="">No contractors at this plant</option>}
             {view.contractors.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name} ({c.workerCount})
@@ -592,6 +592,42 @@ export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery
           </select>
         </div>
       </div>
+
+      {/* ---------- Shift ---------- */}
+      <ShiftSwitch shift={view.shift} onChange={(s) => requestNavigate({ shift: s === "night" ? "night" : "" })} />
+      {view.shift === "night" && isToday && view.contractorId && (
+        <p className="text-sm text-muted-foreground">
+          Last night&apos;s shift ends this morning: record its OUT on{" "}
+          {allowDateChange ? (
+            <button type="button" className="font-medium text-primary hover:underline" onClick={() => requestNavigate({ date: addDays(view.date, -1) })}>
+              yesterday&apos;s night register
+            </button>
+          ) : (
+            <a
+              className="font-medium text-primary hover:underline"
+              href={`/history/day?${new URLSearchParams({ project: project.id, contractor: view.contractorId, date: addDays(view.date, -1), shift: "night" })}`}
+              data-testid="last-night-link"
+            >
+              yesterday&apos;s night register
+            </a>
+          )}
+          .
+        </p>
+      )}
+      {view.otherShift.length > 0 && (
+        <details className="rounded-xl bg-muted/60 px-3.5 py-2.5 text-sm" data-testid="other-shift">
+          <summary className="cursor-pointer text-muted-foreground">
+            {view.otherShift.length} {view.otherShift.length === 1 ? "worker is" : "workers are"} already recorded on the {view.shift === "day" ? "night" : "day"} shift
+          </summary>
+          <ul className="mt-1.5 space-y-0.5">
+            {view.otherShift.map((w) => (
+              <li key={w.workerId}>
+                {w.workerName} <span className="font-mono text-xs text-muted-foreground">{w.employeeCode ?? w.workerCode}</span> · {w.status}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
 
       {/* ---------- Notices ---------- */}
       {view.readOnlyReason && (
@@ -632,7 +668,7 @@ export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery
               icon={<Clock className="size-4.5" />}
               tone="primary"
               title={`Record OUT for ${counts.outMissing} worker${counts.outMissing === 1 ? "" : "s"}`}
-              detail={isToday ? "One checkout time for everyone still on site" : "Checkout was not recorded on this date"}
+              detail={isToday ? "One checkout time for everyone still at work" : "Checkout was not recorded on this date"}
               onClick={() => setSheet({ kind: "bulk-out", nowMs: Date.now() })}
               data-testid="bulk-out"
             />
@@ -700,7 +736,15 @@ export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery
                   <Check className="size-3.5 text-present" strokeWidth={2.5} /> Saved {formatTime12(lastSavedAt)}
                 </span>
               ) : (
-                `${marked} of ${counts.total} marked`
+                <>
+                  {marked} of {counts.total} marked
+                  {counts.outMissing > 0 && (
+                    <span className="text-pending" data-testid="out-missing">
+                      {" "}
+                      · {counts.outMissing} OUT missing
+                    </span>
+                  )}
+                </>
               )}
             </span>
           </div>
@@ -713,7 +757,7 @@ export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery
         <EmptyState
           icon={Users}
           title="No workers on this register"
-          description="No workers are assigned to this contractor at this site on this date."
+          description="No workers are assigned to this contractor at this plant on this date."
         />
       ) : visibleRows.length === 0 ? (
         <EmptyState
@@ -749,7 +793,7 @@ export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery
                 key={row.workerId}
                 workerId={row.workerId}
                 name={row.workerName}
-                code={row.workerCode}
+                code={row.employeeCode ?? row.workerCode}
                 state={state}
                 suggestedIn={suggestedIn}
                 editable={view.editable}
@@ -874,7 +918,7 @@ export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery
           open
           onOpenChange={(o) => !o && setSheet(null)}
           title={`IN time for ${pendingIds.length} pending worker${pendingIds.length === 1 ? "" : "s"}`}
-          description="Only if they are all on site. Logged as a bulk entry; you can still change anyone before saving."
+          description="Only if they are all at work. Logged as a bulk entry; you can still change anyone before saving."
           initialTime={isToday ? nowFor(sheet.nowMs) : inAnchor(sheet.nowMs)}
           quickPicks={inQuickPicks(sheet.nowMs)}
           nowTime={isToday ? nowFor(sheet.nowMs) : null}
@@ -891,8 +935,8 @@ export function AttendanceRegister({ view, basePath, allowDateChange, extraQuery
           <AlertDialogHeader>
             <AlertDialogTitle>Mark {dialogCount} workers present?</AlertDialogTitle>
             <AlertDialogDescription>
-              Everyone still pending gets the site&rsquo;s suggested IN time, {suggestedIn ? formatTime12(suggestedIn) : "—"}. Only do this if
-              they are all on site. These entries are recorded as <strong className="font-semibold text-foreground">bulk confirmed</strong>{" "}
+              Everyone still pending gets the plant&rsquo;s suggested IN time, {suggestedIn ? formatTime12(suggestedIn) : "—"}. Only do this if
+              they are all at work. These entries are recorded as <strong className="font-semibold text-foreground">bulk confirmed</strong>{" "}
               with the suggested time accepted, and you can still change anyone before saving.
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -1007,6 +1051,34 @@ function SearchField({ query, setQuery, className, autoFocus }: { query: string;
         className="h-11 w-full rounded-xl border border-input bg-card pr-3 pl-9 text-base outline-none placeholder:text-subtle-foreground focus-visible:border-primary focus-visible:ring-[3px] focus-visible:ring-ring/25 md:h-10 md:text-sm"
         aria-label="Search workers"
       />
+    </div>
+  );
+}
+
+function ShiftSwitch({ shift, onChange }: { shift: Shift; onChange: (s: Shift) => void }) {
+  return (
+    <div className="inline-flex gap-1 rounded-xl bg-muted p-1" role="tablist" aria-label="Shift" data-testid="shift-switch">
+      {(
+        [
+          ["day", "Day shift", Sun],
+          ["night", "Night shift", Moon],
+        ] as const
+      ).map(([key, label, Icon]) => (
+        <button
+          key={key}
+          type="button"
+          role="tab"
+          aria-selected={shift === key}
+          data-testid={`shift-${key}`}
+          onClick={() => shift !== key && onChange(key)}
+          className={cn(
+            "inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-sm font-medium transition-colors",
+            shift === key ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          <Icon className="size-4" /> {label}
+        </button>
+      ))}
     </div>
   );
 }

@@ -42,7 +42,7 @@ const present = (workerId: string, checkIn: string, o: Record<string, unknown> =
 
 describe("only admins can see or change attendance settings (server-side)", () => {
   it("refuses every settings call from an operator", async () => {
-    const op = ctxFor(store, actors.puneLucknow);
+    const op = ctxFor(store, actors.ledUpcast);
     await expectCode(loadSettings(op), "forbidden");
     await expectCode(lockedTimezones(op), "forbidden");
     await expectCode(newSiteTimezone(op), "forbidden");
@@ -52,7 +52,7 @@ describe("only admins can see or change attendance settings (server-side)", () =
   });
 
   it("the register gives operators effective values only, never versions, notes or authors", async () => {
-    const view = await loadRegister(ctxFor(store, actors.puneLucknow), { projectId: "p2" });
+    const view = await loadRegister(ctxFor(store, actors.ledUpcast), { projectId: "p2" });
     expect(Object.keys(view.policy!).sort()).toEqual(["capture", "day", "operatorEditClosesAt", "operatorWindowClosed", "token"]);
     expect(JSON.stringify(view.policy)).not.toMatch(/notes|createdBy|Illustrative/);
   });
@@ -61,13 +61,12 @@ describe("only admins can see or change attendance settings (server-side)", () =
 describe("company defaults and site overrides", () => {
   it("applies the company default to sites without an override; a site override wins", async () => {
     await createPolicyVersion(adminCtx(), companyVersion({ suggestedCheckIn: "08:15" }));
-    const op = ctxFor(store, actors.east);
-    expect((await loadRegister(op, { projectId: "p4" })).policy?.day.suggestedCheckIn).toBe("08:15"); // inherits
-    expect((await loadRegister(op, { projectId: "p5" })).policy?.day.suggestedCheckIn).toBe("09:00"); // own override
+    expect((await loadRegister(ctxFor(store, actors.quad), { projectId: "p4" })).policy?.day.suggestedCheckIn).toBe("08:15"); // inherits
+    expect((await loadRegister(ctxFor(store, actors.ledUpcast), { projectId: "p3" })).policy?.day.suggestedCheckIn).toBe("09:00"); // own override
   });
 
   it("with no suggested time, nothing is assumed: the register stays pending and 'suggested' is refused", async () => {
-    const op = ctxFor(store, actors.east);
+    const op = ctxFor(store, actors.quad);
     const view = await loadRegister(op, { projectId: "p4" });
     expect(view.policy?.day.suggestedCheckIn).toBeNull();
     expect(view.rows.every((r) => r.saved === null)).toBe(true);
@@ -81,11 +80,11 @@ describe("company defaults and site overrides", () => {
   it("a site can override a company suggestion to 'none'", async () => {
     await createPolicyVersion(adminCtx(), companyVersion({ suggestedCheckIn: "08:15" }));
     await createPolicyVersion(adminCtx(), { projectId: "p4", effectiveFrom: TODAY, overridden: ["suggestedCheckIn"], suggestedCheckIn: null });
-    expect((await loadRegister(ctxFor(store, actors.east), { projectId: "p4" })).policy?.day.suggestedCheckIn).toBeNull();
+    expect((await loadRegister(ctxFor(store, actors.quad), { projectId: "p4" })).policy?.day.suggestedCheckIn).toBeNull();
   });
 
   it("stores an accepted suggestion as such, in the record, the change log and the report; OUT later keeps it", async () => {
-    const op = ctxFor(store, actors.puneLucknow);
+    const op = ctxFor(store, actors.ledUpcast);
     const [a] = (await loadRegister(op, { projectId: "p2", contractorId: "c2" })).rows;
     const base = { projectId: "p2", contractorId: "c2", workDate: TODAY };
     await saveAttendance(op, { ...base, items: [present(a.workerId, "09:00", { checkInSource: "suggested", method: "bulk" })] });
@@ -102,7 +101,7 @@ describe("company defaults and site overrides", () => {
 describe("future-time rules come from the site's policy, the same for bulk and individual", () => {
   it("gives individual and bulk saves the same verdict for the same input", async () => {
     await createPolicyVersion(adminCtx(), { projectId: "p2", effectiveFrom: TODAY, overridden: ["suggestedCheckIn", "inFutureToleranceMin", "outFutureToleranceMin"], suggestedCheckIn: "09:00", inFutureToleranceMin: 0, outFutureToleranceMin: 0 });
-    const op = ctxFor(store, actors.puneLucknow);
+    const op = ctxFor(store, actors.ledUpcast);
     const rows = (await loadRegister(op, { projectId: "p2", contractorId: "c2" })).rows;
     const base = { projectId: "p2", contractorId: "c2", workDate: TODAY };
     // NOW is 12:30 IST.
@@ -129,10 +128,10 @@ describe("the operator edit window at midnight and the cutoff", () => {
   it("closes today's register for operators at the site's midnight (IST)", async () => {
     const at2359 = new Date("2026-10-20T18:29:00Z");
     const at0001 = new Date("2026-10-20T18:31:00Z");
-    const [w] = (await loadRegister(ctxFor(store, actors.puneLucknow, at2359), { projectId: "p2", contractorId: "c2" })).rows;
+    const [w] = (await loadRegister(ctxFor(store, actors.ledUpcast, at2359), { projectId: "p2", contractorId: "c2" })).rows;
     const items = [present(w.workerId, "23:50")];
-    await expect(saveAttendance(ctxFor(store, actors.puneLucknow, at2359), { projectId: "p2", contractorId: "c2", workDate: TODAY, items })).resolves.toMatchObject({ saved: 1 });
-    const after = ctxFor(store, actors.puneLucknow, at0001);
+    await expect(saveAttendance(ctxFor(store, actors.ledUpcast, at2359), { projectId: "p2", contractorId: "c2", workDate: TODAY, items })).resolves.toMatchObject({ saved: 1 });
+    const after = ctxFor(store, actors.ledUpcast, at0001);
     await expectCode(saveAttendance(after, { projectId: "p2", contractorId: "c2", workDate: TODAY, items: [{ ...items[0], status: "absent", checkIn: null, expectedVersion: 1 }] }), "forbidden");
     const view = await loadRegister(after, { projectId: "p2", contractorId: "c2", date: TODAY });
     expect(view.today).toBe(addDays(TODAY, 1));
@@ -147,29 +146,29 @@ describe("the operator edit window at midnight and the cutoff", () => {
     const project = await admin.createProject(a, { name: "Kathmandu Test Site", location: "Kathmandu, Nepal", timezone: "Asia/Kathmandu" });
     await admin.addContractorToProject(a, { contractorId: "c2", projectId: project.id, startDate: "2026-10-01" });
     const worker = await admin.createWorker(a, { fullName: "Test Worker", contractorId: "c2", projectId: project.id, startDate: "2026-10-01" });
-    await admin.setOperatorAccess(a, { operatorId: actors.puneLucknow.id, projectId: project.id, granted: true });
+    await admin.setOperatorAccess(a, { operatorId: actors.ledUpcast.id, projectId: project.id, granted: true });
     const at2359 = new Date("2026-10-20T18:14:00Z"); // 23:59 in Kathmandu, 23:44 in India
     const at0001 = new Date("2026-10-20T18:16:00Z"); // 00:01 in Kathmandu, still the 20th in India
-    const view = await loadRegister(ctxFor(store, actors.puneLucknow, at2359), { projectId: project.id });
+    const view = await loadRegister(ctxFor(store, actors.ledUpcast, at2359), { projectId: project.id });
     expect(view.today).toBe("2026-10-20");
     const item = present(worker.id, "23:55");
-    await expect(saveAttendance(ctxFor(store, actors.puneLucknow, at2359), { projectId: project.id, contractorId: "c2", workDate: "2026-10-20", items: [item] })).resolves.toMatchObject({ saved: 1 });
-    expect((await loadRegister(ctxFor(store, actors.puneLucknow, at0001), { projectId: project.id })).today).toBe("2026-10-21");
+    await expect(saveAttendance(ctxFor(store, actors.ledUpcast, at2359), { projectId: project.id, contractorId: "c2", workDate: "2026-10-20", items: [item] })).resolves.toMatchObject({ saved: 1 });
+    expect((await loadRegister(ctxFor(store, actors.ledUpcast, at0001), { projectId: project.id })).today).toBe("2026-10-21");
     await expectCode(
-      saveAttendance(ctxFor(store, actors.puneLucknow, at0001), { projectId: project.id, contractorId: "c2", workDate: "2026-10-20", items: [{ ...item, checkIn: "23:56", expectedVersion: 1 }] }),
+      saveAttendance(ctxFor(store, actors.ledUpcast, at0001), { projectId: project.id, contractorId: "c2", workDate: "2026-10-20", items: [{ ...item, checkIn: "23:56", expectedVersion: 1 }] }),
       "forbidden",
     );
   });
 
   it("past days + cutoff: yesterday is editable only until the cutoff time today", async () => {
-    // Jaipur (p1) lets operators edit 1 past day; add a 10:00 cutoff (repeating the site's other settings).
+    // The PVC Plant (p1) lets operators edit 1 past day; add a 10:00 cutoff (repeating the plant's other settings).
     const settings = await loadSettings(adminCtx());
     const p1 = settings.sites.find((s) => s.project.id === "p1")!;
     const keep = Object.fromEntries(p1.current!.overridden.map((f) => [f, p1.current![f]]));
     await createPolicyVersion(adminCtx(), { projectId: "p1", effectiveFrom: TODAY, overridden: [...p1.current!.overridden, "editCutoffTime"], ...keep, editCutoffTime: "10:00" });
     const yesterday = addDays(TODAY, -1);
-    const before = ctxFor(store, actors.jaipur, new Date("2026-10-20T04:29:00Z")); // 09:59 IST
-    const after = ctxFor(store, actors.jaipur, new Date("2026-10-20T04:31:00Z")); // 10:01 IST
+    const before = ctxFor(store, actors.pvc, new Date("2026-10-20T04:29:00Z")); // 09:59 IST
+    const after = ctxFor(store, actors.pvc, new Date("2026-10-20T04:31:00Z")); // 10:01 IST
     expect((await loadRegister(before, { projectId: "p1", contractorId: "c1", date: yesterday })).editable).toBe(true);
     const view = await loadRegister(after, { projectId: "p1", contractorId: "c1", date: yesterday });
     expect(view.editable).toBe(false);
@@ -256,7 +255,7 @@ describe("versions, retroactivity and concurrency", () => {
   });
 
   it("rejects a save made with settings that changed after the register was loaded", async () => {
-    const op = ctxFor(store, actors.puneLucknow);
+    const op = ctxFor(store, actors.ledUpcast);
     const view = await loadRegister(op, { projectId: "p2", contractorId: "c2" });
     await createPolicyVersion(adminCtx(), { projectId: "p2", effectiveFrom: TODAY, overridden: ["suggestedCheckIn"], suggestedCheckIn: "09:30" });
     const item = present(view.rows[0].workerId, "09:00", { checkInSource: "suggested" });
@@ -271,7 +270,7 @@ describe("site timezone and labels", () => {
   it("locks a site's timezone once it has attendance", async () => {
     const a = adminCtx();
     expect(await lockedTimezones(a)).toContain("p2");
-    await expectCode(admin.updateProject(a, "p2", { name: "District Hospital Fire Safety Retrofit (Demo)", location: "Pune, Maharashtra", isActive: true, timezone: "Asia/Dubai" }), "invalid");
+    await expectCode(admin.updateProject(a, "p2", { name: "LED Rope Light Plant (Demo)", location: "Unit 2 (Demo)", isActive: true, timezone: "Asia/Dubai" }), "invalid");
     const fresh = await admin.createProject(a, { name: "New Site", location: "Somewhere", timezone: "Asia/Kolkata" });
     await admin.updateProject(a, fresh.id, { name: "New Site", location: "Somewhere", isActive: true, timezone: "Asia/Dubai" });
     expect((await store.listProjects()).find((p) => p.id === fresh.id)?.timezone).toBe("Asia/Dubai");
@@ -279,8 +278,8 @@ describe("site timezone and labels", () => {
   });
 
   it("labels late arrivals from the site's shift start and grace, without changing pay", async () => {
-    // Jaipur (p1): shift 09:00, 15 min grace (illustrative demo settings).
-    const op = ctxFor(store, actors.jaipur);
+    // PVC Plant (p1): shift 09:00, 15 min grace, 30 min break (illustrative demo settings).
+    const op = ctxFor(store, actors.pvc);
     const view = await loadRegister(op, { projectId: "p1", contractorId: "c1" });
     const w = view.rows.find((r) => r.saved === null)!;
     await saveAttendance(op, { projectId: "p1", contractorId: "c1", workDate: TODAY, items: [present(w.workerId, "09:20", { checkOut: "12:00" })] });

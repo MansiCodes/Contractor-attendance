@@ -13,7 +13,7 @@ export default async function LoginPage() {
   const actor = await getActor();
   if (actor) redirect(actor.role === "admin" ? "/admin" : "/attendance");
 
-  let demoUsers: { id: string; name: string; role: "admin" | "operator"; sites: string[] }[] = [];
+  let demoUsers: { id: string; name: string; role: "admin" | "operator"; plants: string[] }[] = [];
   if (mode === "demo") {
     const { getDemoStore } = await import("@/lib/server/store/demo-store");
     const store = getDemoStore();
@@ -24,9 +24,9 @@ export default async function LoginPage() {
         id: p.id,
         name: p.fullName,
         role: p.role,
-        sites: access
+        plants: access
           .filter((a) => a.operatorId === p.id && !a.revokedAt)
-          .map((a) => projects.find((x) => x.id === a.projectId)?.location.split(",")[0] ?? "")
+          .map((a) => projects.find((x) => x.id === a.projectId)?.name.replace(/\s*\(Demo\)/, "") ?? "")
           .filter(Boolean),
       }));
   }
@@ -41,12 +41,12 @@ export default async function LoginPage() {
           </div>
           <div className="space-y-1.5">
             <h1 className="text-2xl font-semibold tracking-tight">NF Attendance Register</h1>
-            <p className="text-md text-muted-foreground">Contractor labour attendance for NF project sites.</p>
+            <p className="text-md text-muted-foreground">Contractor labour attendance for our manufacturing plants.</p>
           </div>
         </div>
         {mode === "demo" ? <DemoLogin users={demoUsers} /> : <LiveLogin />}
       </div>
-      <p className="pb-6 text-center text-xs text-subtle-foreground">Valuecon · Notofire</p>
+      <p className="pb-6 text-center text-xs text-subtle-foreground">Atlanta Tele Cables · Valuecon · Notofire</p>
     </div>
   );
 }

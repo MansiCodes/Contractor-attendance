@@ -5,8 +5,6 @@ import { format } from "date-fns";
 // never by subtracting formatted strings. Calendar dates are plain
 // "yyyy-MM-dd" strings interpreted in a project's own timezone.
 
-export const DEFAULT_TIMEZONE = "Asia/Kolkata";
-
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 

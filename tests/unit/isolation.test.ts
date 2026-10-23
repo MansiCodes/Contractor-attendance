@@ -59,7 +59,7 @@ describe("16. demo data cannot leak into production", () => {
     const good = signDemoSession("demo-admin");
     expect(verifyDemoSession(good)).toBe("demo-admin");
     expect(verifyDemoSession("demo-admin.forged")).toBeNull();
-    expect(verifyDemoSession(good.replace("demo-admin", "demo-op-jaipur"))).toBeNull();
+    expect(verifyDemoSession(good.replace("demo-admin", "demo-op-pvc"))).toBeNull();
     expect(verifyDemoSession(undefined)).toBeNull();
     vi.doUnmock("next/headers");
   });
@@ -90,7 +90,7 @@ describe("Supabase error and row mapping", () => {
     expect(site).toMatchObject({ projectId: "p", overridden: ["suggestedCheckIn", "operatorBackdateDays"], suggestedCheckIn: null, operatorBackdateDays: 2 });
     expect(map.policyFields({ ...site, defaultTimezone: null })).toMatchObject({ overridden: ["suggested_check_in", "operator_backdate_days"], operator_backdate_days: 2 });
     const company = map.policyRow({ id: "c", project_id: null, version: 1, effective_from: "1900-01-01", overridden: [], suggested_check_in: "08:30:00", in_future_tolerance_min: 60, default_timezone: "Asia/Kolkata", created_at: "2026-01-01T00:00:00Z" });
-    expect(company.overridden).toHaveLength(13);
+    expect(company.overridden).toHaveLength(15);
     expect(company.suggestedCheckIn).toBe("08:30");
     expect(map.effectivePolicy({ suggested_check_in: null, allow_overnight: true, in_future_tolerance_min: 15, half_day_below_hours: "4.50", company_policy_id: "c", site_policy_id: null })).toMatchObject({
       suggestedCheckIn: null, allowOvernight: true, inFutureToleranceMin: 15, halfDayBelowHours: 4.5, companyPolicyId: "c", sitePolicyId: null,
@@ -98,6 +98,11 @@ describe("Supabase error and row mapping", () => {
     const rule = map.paymentRule({ id: "r", contractor_id: "c", version: 1, effective_from: "2026-01-01", rate_type: "per_day", day_rate: "650.00", hour_rate: null, full_day_hours: "8.00", half_day_hours: null, overtime_enabled: false, overtime_after_hours: null, overtime_hour_rate: null, unpaid_break_minutes: 30, notes: null, created_at: "2026-01-01T00:00:00Z", created_by: null });
     expect(rule.dayRate).toBe(650);
     expect(rule.fullDayHours).toBe(8);
+    // A rule saved before the v2 settings keeps its meaning: contractor rate, half-day thresholds, no commission.
+    expect(rule).toMatchObject({ rateSource: "contractor", shortDayPolicy: "half_day", overtimeRounding: "exact", commissionEnabled: false });
+    const v2 = map.paymentRule({ id: "r2", contractor_id: "c", version: 2, effective_from: "2026-09-01", rule_format: 2, rate_source: "worker", rate_type: "per_day", day_rate: null, hour_rate: null, full_day_hours: "8.00", half_day_hours: null, short_day_policy: null, overtime_enabled: true, overtime_after_hours: "8.50", overtime_after_night_hours: "8.00", overtime_rate_mode: null, overtime_rounding: null, overtime_min_minutes: 0, unpaid_break_minutes: 0, commission_enabled: true, commission_percent: "7.50", commission_scope: "selected", commission_base: null, commission_treatment: null, notes: null, created_at: "2026-09-01T00:00:00Z", created_by: null });
+    expect(v2).toMatchObject({ rateSource: "worker", shortDayPolicy: null, overtimeAfterHours: 8.5, overtimeAfterNightHours: 8, overtimeRateMode: null, commissionPercent: 7.5, commissionScope: "selected", commissionBase: null });
+    expect(map.paymentRuleFields(v2)).toMatchObject({ rule_format: 2, rate_source: "worker", overtime_after_night_hours: 8, commission_scope: "selected" });
     const log = map.auditLog({ id: 7, attendance_id: "a", worker_id: "w", project_id: "p", contractor_id: "c", work_date: "2026-10-20", action: "update", method: "individual", changed_by: "u", changed_by_role: "operator", changed_at: "2026-10-20T04:00:00+00:00", old_values: { status: "present", check_in_at: "2026-10-20T03:30:00+00:00", check_out_at: null }, new_values: { status: "absent", check_in_at: null, check_out_at: null } });
     expect(log.id).toBe("7");
     expect(log.oldValues?.checkInAt).toBe("2026-10-20T03:30:00.000Z");

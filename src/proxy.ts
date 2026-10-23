@@ -24,5 +24,6 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|icon|manifest.webmanifest|.*\\.(?:svg|png|jpg|jpeg|webp)$).*)"],
+  // The WhatsApp webhook and scheduled dispatch carry no user session; they check their own secrets.
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|icon|manifest.webmanifest|api/whatsapp/webhook|api/whatsapp/dispatch|.*\\.(?:svg|png|jpg|jpeg|webp)$).*)"],
 };

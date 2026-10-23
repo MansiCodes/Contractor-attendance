@@ -20,7 +20,7 @@ type Scope = { kind: "company" } | { kind: "site"; projectId: string; projectNam
 type FormValue = string | boolean;
 type FormValues = Record<PolicyField, FormValue>;
 
-const TIME: PolicyField[] = ["suggestedCheckIn", "shiftStart", "shiftEnd", "editCutoffTime"];
+const TIME: PolicyField[] = ["suggestedCheckIn", "nightSuggestedCheckIn", "shiftStart", "shiftEnd", "editCutoffTime"];
 const BOOL: PolicyField[] = ["allowOvernight", "autoAbsentEnabled"];
 /** Shift start and end are inherited or overridden together. */
 const unitOf = (f: PolicyField): PolicyField[] => (f === "shiftStart" || f === "shiftEnd" ? ["shiftStart", "shiftEnd"] : [f]);
@@ -36,11 +36,11 @@ const snapshotAt = (snapshots: PolicySnapshot[], date: string) =>
 
 const GROUPS: { title: string; note?: string; fields: PolicyField[] }[] = [
   {
-    title: "Check-in",
+    title: "Shift",
     note: "A suggested time is only a starting point on the register. Workers stay pending until an operator confirms them, and accepted suggestions are flagged in reports.",
-    fields: ["suggestedCheckIn", "shiftStart", "shiftEnd"],
+    fields: ["suggestedCheckIn", "shiftStart", "shiftEnd", "breakMinutes", "allowOvernight", "nightSuggestedCheckIn"],
   },
-  { title: "Time checks", fields: ["inFutureToleranceMin", "outFutureToleranceMin", "allowOvernight"] },
+  { title: "Time checks", fields: ["inFutureToleranceMin", "outFutureToleranceMin"] },
   {
     title: "Editing past attendance",
     note: "Head office admins can always correct any date up to today. Every change is logged.",
@@ -56,7 +56,10 @@ const GROUPS: { title: string; note?: string; fields: PolicyField[] }[] = [
 
 const HINTS: Partial<Record<PolicyField, string>> = {
   suggestedCheckIn: "Leave empty for no suggestion: operators then enter each IN time.",
+  nightSuggestedCheckIn:
+    "For plants with a night shift. Leave empty for no suggestion. A night shift's OUT may always be the next morning; let operators edit 1 past day so they can record it.",
   shiftStart: "Used for late labels. Set start and end together, or leave both empty.",
+  breakMinutes: "Leave empty for none. Not counted as worked time. Payable hours still follow each contractor's payment rule.",
   editCutoffTime: "Leave empty for the end of the day.",
   lateGraceMin: "Leave empty to turn late labels off. Needs a shift start.",
   halfDayBelowHours: "Leave empty to turn off.",
@@ -91,7 +94,7 @@ export function PolicyForm({
   const [allowBackdate, setAllowBackdate] = useState(false);
   const [timezone, setTimezone] = useState(base.defaultTimezone);
   const [notes, setNotes] = useState("");
-  const inherited = toForm(base.company); // what a site gets for fields it does not override
+  const inherited = toForm(base.company); // what a plant gets for fields it does not override
 
   const changeDate = (date: string) => {
     setEffectiveFrom(date);
@@ -239,7 +242,7 @@ export function PolicyForm({
       ))}
 
       {scope.kind === "company" && (
-        <Field label="Timezone for new sites" htmlFor="pol-tz" hint="Preselected when adding a site. Existing sites keep their own timezone.">
+        <Field label="Timezone for new plants" htmlFor="pol-tz" hint="Preselected when adding a plant. Existing plants keep their own timezone.">
           <select id="pol-tz" className={selectClass} value={timezone} onChange={(e) => setTimezone(e.target.value)}>
             <TimezoneOptions current={timezone} />
           </select>

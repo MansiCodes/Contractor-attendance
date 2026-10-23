@@ -19,10 +19,10 @@ export default async function ContractorsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Contractors" description="Labour contractors supplying workers to project sites." actions={<AddContractorDialog />} />
+      <PageHeader title="Contractors" description="Labour contractors supplying workers to our manufacturing plants." actions={<AddContractorDialog />} />
 
       {contractors.length === 0 ? (
-        <EmptyState icon={Building2} title="No contractors yet" description="Add the first contractor, then assign them to a project." action={<AddContractorDialog />} />
+        <EmptyState icon={Building2} title="No contractors yet" description="Add the first contractor, then assign them to a plant." action={<AddContractorDialog />} />
       ) : (
         <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {contractors.map((c) => {
@@ -41,19 +41,24 @@ export default async function ContractorsPage() {
                       {c.name}
                     </Link>
                     <div className="flex items-center gap-1 truncate text-sm text-muted-foreground">
-                      <MapPin className="size-3.5 shrink-0" /> <span className="truncate">{c.location}</span>
+                      <MapPin className="size-3.5 shrink-0" /> <span className="truncate">{c.location ?? "Location not recorded"}</span>
                     </div>
                   </div>
                   <ContractorMenu contractorId={c.id} name={c.name} />
                 </div>
                 <div className="tabular flex items-center gap-2 px-4 pb-3 text-sm">
                   <span>
-                    <strong className="font-semibold">{workers}</strong> <span className="text-muted-foreground">workers</span>
+                    <strong className="font-semibold">{workers}</strong> <span className="text-muted-foreground">active workers</span>
                   </span>
                   <span className="text-subtle-foreground">·</span>
                   <span>
-                    <strong className="font-semibold">{sites.size}</strong> <span className="text-muted-foreground">{sites.size === 1 ? "site" : "sites"}</span>
+                    <strong className="font-semibold">{sites.size}</strong> <span className="text-muted-foreground">{sites.size === 1 ? "plant" : "plants"}</span>
                   </span>
+                  {c.identityStatus === "needs_review" && (
+                    <StatusPill tone="pending" className="ml-auto">
+                      Needs review
+                    </StatusPill>
+                  )}
                   {!c.isActive && (
                     <StatusPill tone="neutral" className="ml-auto">
                       Inactive

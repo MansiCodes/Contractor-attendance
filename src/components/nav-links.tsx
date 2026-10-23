@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Building2, ClipboardCheck, History, LayoutGrid, MapPin, Settings, Users } from "lucide-react";
+import { Building2, ClipboardCheck, Factory, History, LayoutGrid, Settings, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const NAV = {
@@ -11,7 +11,7 @@ const NAV = {
   overview: { href: "/admin", label: "Overview", icon: LayoutGrid, match: (p: string) => p === "/admin" },
   "attendance-admin": { href: "/admin/attendance", label: "Attendance", icon: ClipboardCheck, match: (p: string) => p.startsWith("/admin/attendance") },
   contractors: { href: "/admin/contractors", label: "Contractors", icon: Building2, match: (p: string) => p.startsWith("/admin/contractors") },
-  projects: { href: "/admin/projects", label: "Projects", icon: MapPin, match: (p: string) => p.startsWith("/admin/projects") },
+  projects: { href: "/admin/plants", label: "Plants", icon: Factory, match: (p: string) => p.startsWith("/admin/plants") },
   workers: { href: "/admin/workers", label: "Workers", icon: Users, match: (p: string) => p.startsWith("/admin/workers") },
   settings: { href: "/admin/settings", label: "Settings", icon: Settings, match: (p: string) => p.startsWith("/admin/settings") },
 } as const;
@@ -32,7 +32,7 @@ export function NavLinks({ items, variant }: { items: NavKey[]; variant: "top" |
                 href={n.href}
                 aria-current={active ? "page" : undefined}
                 className={cn(
-                  "flex h-8 items-center rounded-lg px-3 text-sm font-medium whitespace-nowrap transition-colors",
+                  "flex h-8 items-center rounded-lg px-2 text-sm font-medium whitespace-nowrap transition-colors lg:px-3",
                   active ? "bg-card text-foreground shadow-surface" : "text-muted-foreground hover:bg-muted hover:text-foreground",
                 )}
               >

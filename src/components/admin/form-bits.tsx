@@ -82,7 +82,7 @@ export const selectClass =
   "select-native h-11 w-full rounded-lg border border-input bg-card pl-3 text-base outline-none focus-visible:border-primary focus-visible:ring-[3px] focus-visible:ring-ring/25 disabled:opacity-50";
 export const inputClass = "h-11 text-base";
 
-/** Site timezones offered in pickers. Any valid IANA zone is accepted by the server; a site's current zone is always listed. */
+/** Plant timezones offered in pickers. Any valid IANA zone is accepted by the server; a plant's current zone is always listed. */
 const TIMEZONES: { value: string; label: string }[] = [
   { value: "Asia/Kolkata", label: "India (IST, UTC+05:30)" },
   { value: "Asia/Kathmandu", label: "Nepal (UTC+05:45)" },

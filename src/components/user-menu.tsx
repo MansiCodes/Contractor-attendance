@@ -30,7 +30,7 @@ export function UserMenu({ name, role, demo }: { name: string; role: "admin" | "
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" className="h-10 gap-2 rounded-full pr-2 pl-1 lg:max-w-52" data-testid="user-menu" aria-label={`Account: ${name}`}>
+          <Button variant="ghost" className="h-10 min-w-0 shrink gap-2 rounded-full pr-2 pl-1 lg:max-w-52" data-testid="user-menu" aria-label={`Account: ${name}`}>
             <span className="grid size-8 shrink-0 place-items-center rounded-full bg-muted text-xs font-semibold text-foreground">{initials(name)}</span>
             <span className="hidden truncate text-sm font-medium lg:inline">{name}</span>
             <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
@@ -39,7 +39,7 @@ export function UserMenu({ name, role, demo }: { name: string; role: "admin" | "
         <DropdownMenuContent align="end" className="w-64">
           <DropdownMenuLabel>
             <div className="truncate font-semibold">{name}</div>
-            <div className="text-xs font-normal text-muted-foreground">{role === "admin" ? "NF Admin" : "Site Operator"}</div>
+            <div className="text-xs font-normal text-muted-foreground">{role === "admin" ? "Head office admin" : "Plant attendance operator"}</div>
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
           {demo ? (

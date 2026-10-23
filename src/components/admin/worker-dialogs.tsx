@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { ArrowLeftRight, Loader2, MoreHorizontal, Pencil, Plus, UserCheck, UserX } from "lucide-react";
+import { ArrowLeftRight, Factory, Loader2, MoreHorizontal, Pencil, Plus, UserCheck, UserX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -17,6 +17,7 @@ import {
   transferWorkerAction,
   updateWorkerAction,
 } from "@/lib/server/actions/admin";
+import { assignWorkersAction } from "@/lib/server/actions/import";
 import { workerCreate, workerUpdate } from "@/lib/domain/schemas";
 import { Field, selectClass, useServerAction } from "./form-bits";
 
@@ -28,7 +29,7 @@ export interface Option {
 export interface DeploymentOptions {
   contractors: Option[];
   projects: Option[];
-  /** contractorId -> project ids where that contractor is currently assigned */
+  /** contractorId -> plant (project) ids where that contractor is currently assigned */
   sitesByContractor: Record<string, string[]>;
   today: string;
 }
@@ -46,6 +47,9 @@ export function AddWorkerDialog({ options, defaultContractorId, defaultProjectId
     contractorId: initialContractor,
     projectId: defaultProjectId && sitesFor(initialContractor).some((p) => p.id === defaultProjectId) ? defaultProjectId : sitesFor(initialContractor)[0]?.id ?? "",
     startDate: options.today,
+    employeeCode: "",
+    department: "",
+    designation: "",
     phone: "",
     notes: "",
   });
@@ -59,7 +63,7 @@ export function AddWorkerDialog({ options, defaultContractorId, defaultProjectId
     run(() => createWorkerAction(v), {
       success: (w) => `${w.fullName} added as ${w.code}`,
       onSuccess: () => {
-        if (addAnother) form.reset({ ...v, fullName: "", phone: "", notes: "" });
+        if (addAnother) form.reset({ ...v, fullName: "", employeeCode: "", phone: "", notes: "" });
         else {
           setOpen(false);
           form.reset(defaults());
@@ -77,11 +81,19 @@ export function AddWorkerDialog({ options, defaultContractorId, defaultProjectId
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Add worker</DialogTitle>
-            <DialogDescription>Only the name and site are needed. A worker ID is created automatically.</DialogDescription>
+            <DialogDescription>Only the name and plant are needed. A system worker ID is created automatically.</DialogDescription>
           </DialogHeader>
           <form onSubmit={submit} className="space-y-4" noValidate>
             <Field label="Full name" htmlFor="w-name" error={form.formState.errors.fullName?.message}>
               <Input id="w-name" autoComplete="off" {...form.register("fullName")} />
+            </Field>
+            <Field
+              label="Contractor's employee ID (optional)"
+              htmlFor="w-empcode"
+              hint="Exactly as on the contractor's records, e.g. SG2001. Used to match registers and imports."
+              error={form.formState.errors.employeeCode?.message}
+            >
+              <Input id="w-empcode" autoComplete="off" spellCheck={false} {...form.register("employeeCode")} />
             </Field>
             <Field label="Contractor" htmlFor="w-contractor" error={form.formState.errors.contractorId?.message}>
               <select
@@ -97,10 +109,10 @@ export function AddWorkerDialog({ options, defaultContractorId, defaultProjectId
               </select>
             </Field>
             <Field
-              label="Project site"
+              label="Plant"
               htmlFor="w-project"
               error={form.formState.errors.projectId?.message}
-              hint={sites.length === 0 ? "This contractor is not assigned to any project yet. Assign it under Projects." : undefined}
+              hint={sites.length === 0 ? "This contractor is not assigned to any plant yet. Assign it under Plants." : undefined}
             >
               <select id="w-project" className={selectClass} disabled={sites.length === 0} {...form.register("projectId")}>
                 {sites.map((p) => (
@@ -113,6 +125,14 @@ export function AddWorkerDialog({ options, defaultContractorId, defaultProjectId
             </Field>
             {more ? (
               <>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Field label="Department (optional)" htmlFor="w-dept">
+                    <Input id="w-dept" {...form.register("department")} />
+                  </Field>
+                  <Field label="Designation (optional)" htmlFor="w-desig">
+                    <Input id="w-desig" {...form.register("designation")} />
+                  </Field>
+                </div>
                 <Field label="Phone (optional)" htmlFor="w-phone">
                   <Input id="w-phone" type="tel" inputMode="tel" {...form.register("phone")} />
                 </Field>
@@ -122,7 +142,7 @@ export function AddWorkerDialog({ options, defaultContractorId, defaultProjectId
               </>
             ) : (
               <button type="button" className="inline-flex h-8 items-center gap-1 rounded-md text-sm font-medium text-primary hover:underline" onClick={() => setMore(true)}>
-                <Plus className="size-3.5" /> Phone or notes (optional)
+                <Plus className="size-3.5" /> Department, phone or notes (optional)
               </button>
             )}
             <label className="flex cursor-pointer items-center gap-2.5 text-sm text-muted-foreground">
@@ -144,8 +164,11 @@ export function AddWorkerDialog({ options, defaultContractorId, defaultProjectId
 export interface WorkerSummary {
   id: string;
   code: string;
+  employeeCode: string | null;
   fullName: string;
   contractorId: string;
+  department: string | null;
+  designation: string | null;
   isActive: boolean;
   phone: string | null;
   notes: string | null;
@@ -153,7 +176,7 @@ export interface WorkerSummary {
   currentSince: string | null;
 }
 
-type Mode = "edit" | "transfer" | "deactivate" | "reactivate" | null;
+type Mode = "edit" | "assign" | "transfer" | "deactivate" | "reactivate" | null;
 
 export function WorkerActions({ worker, options }: { worker: WorkerSummary; options: DeploymentOptions }) {
   const [mode, setMode] = useState<Mode>(null);
@@ -171,9 +194,15 @@ export function WorkerActions({ worker, options }: { worker: WorkerSummary; opti
           </DropdownMenuItem>
           {worker.isActive ? (
             <>
-              <DropdownMenuItem onSelect={() => setMode("transfer")}>
-                <ArrowLeftRight /> Transfer to another site
-              </DropdownMenuItem>
+              {worker.currentProjectId ? (
+                <DropdownMenuItem onSelect={() => setMode("transfer")}>
+                  <ArrowLeftRight /> Transfer to another plant
+                </DropdownMenuItem>
+              ) : (
+                <DropdownMenuItem onSelect={() => setMode("assign")}>
+                  <Factory /> Assign to plant
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem variant="destructive" onSelect={() => setMode("deactivate")}>
                 <UserX /> Deactivate
               </DropdownMenuItem>
@@ -186,6 +215,7 @@ export function WorkerActions({ worker, options }: { worker: WorkerSummary; opti
         </DropdownMenuContent>
       </DropdownMenu>
       {mode === "edit" && <EditWorker worker={worker} onClose={() => setMode(null)} />}
+      {mode === "assign" && <AssignPlantDialog workers={[worker]} options={options} onClose={() => setMode(null)} />}
       {mode === "transfer" && <TransferWorker worker={worker} options={options} onClose={() => setMode(null)} />}
       {mode === "deactivate" && <DeactivateWorker worker={worker} today={options.today} onClose={() => setMode(null)} />}
       {mode === "reactivate" && <ReactivateWorker worker={worker} options={options} onClose={() => setMode(null)} />}
@@ -197,7 +227,14 @@ function EditWorker({ worker, onClose }: { worker: WorkerSummary; onClose: () =>
   const { pending, run } = useServerAction();
   const form = useForm<z.input<typeof workerUpdate>, unknown, z.output<typeof workerUpdate>>({
     resolver: zodResolver(workerUpdate),
-    defaultValues: { fullName: worker.fullName, phone: worker.phone ?? "", notes: worker.notes ?? "" },
+    defaultValues: {
+      fullName: worker.fullName,
+      employeeCode: worker.employeeCode ?? "",
+      department: worker.department ?? "",
+      designation: worker.designation ?? "",
+      phone: worker.phone ?? "",
+      notes: worker.notes ?? "",
+    },
   });
   const submit = form.handleSubmit((v) => run(() => updateWorkerAction(worker.id, v), { success: "Worker updated", onSuccess: onClose }));
   return (
@@ -210,6 +247,22 @@ function EditWorker({ worker, onClose }: { worker: WorkerSummary; onClose: () =>
           <Field label="Full name" htmlFor="we-name" error={form.formState.errors.fullName?.message}>
             <Input id="we-name" {...form.register("fullName")} />
           </Field>
+          <Field
+            label="Contractor's employee ID"
+            htmlFor="we-empcode"
+            hint="Kept exactly as typed: spaces, leading zeros, O and 0 are different."
+            error={form.formState.errors.employeeCode?.message}
+          >
+            <Input id="we-empcode" spellCheck={false} {...form.register("employeeCode")} />
+          </Field>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Department" htmlFor="we-dept">
+              <Input id="we-dept" {...form.register("department")} />
+            </Field>
+            <Field label="Designation" htmlFor="we-desig">
+              <Input id="we-desig" {...form.register("designation")} />
+            </Field>
+          </div>
           <Field label="Phone (optional)" htmlFor="we-phone">
             <Input id="we-phone" type="tel" {...form.register("phone")} />
           </Field>
@@ -239,7 +292,7 @@ function TransferWorker({ worker, options, onClose }: { worker: WorkerSummary; o
         <DialogHeader>
           <DialogTitle>Transfer {worker.fullName}</DialogTitle>
           <DialogDescription>
-            Past attendance stays with the current site. From the chosen date the worker appears on the new site&apos;s register.
+            Past attendance stays with the current plant. From the chosen date the worker appears on the new plant&apos;s register.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
@@ -258,7 +311,7 @@ function TransferWorker({ worker, options, onClose }: { worker: WorkerSummary; o
               ))}
             </select>
           </Field>
-          <Field label="New project site" htmlFor="t-project">
+          <Field label="New plant" htmlFor="t-project">
             <select id="t-project" className={selectClass} value={projectId} onChange={(e) => setProjectId(e.target.value)}>
               {sites.map((p) => (
                 <option key={p.id} value={p.id}>
@@ -325,7 +378,7 @@ function ReactivateWorker({ worker, options, onClose }: { worker: WorkerSummary;
           <DialogTitle>Reactivate {worker.fullName}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
-          <Field label="Project site" htmlFor="r-project">
+          <Field label="Plant" htmlFor="r-project">
             <select id="r-project" className={selectClass} value={projectId} onChange={(e) => setProjectId(e.target.value)}>
               {sites.map((p) => (
                 <option key={p.id} value={p.id}>{p.name}</option>
@@ -342,6 +395,66 @@ function ReactivateWorker({ worker, options, onClose }: { worker: WorkerSummary;
             onClick={() => run(() => reactivateWorkerAction(worker.id, { projectId, startDate: date }), { success: "Worker reactivated", onSuccess: onClose })}
           >
             Reactivate
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** First plant for Unassigned workers (e.g. after an import). */
+export function AssignPlantDialog({ workers, options, onClose }: { workers: { id: string; contractorId: string }[]; options: DeploymentOptions; onClose: (done: boolean) => void }) {
+  const { pending, run } = useServerAction();
+  const [projectId, setProjectId] = useState(options.projects[0]?.id ?? "");
+  const [date, setDate] = useState(options.today);
+  const [addContractor, setAddContractor] = useState(false);
+  const contractorIds = [...new Set(workers.map((w) => w.contractorId))];
+  const notOnPlant = contractorIds.filter((c) => !options.sitesByContractor[c]?.includes(projectId));
+  const names = new Map(options.contractors.map((c) => [c.id, c.name]));
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose(false)}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>
+            Assign {workers.length} {workers.length === 1 ? "worker" : "workers"} to a plant
+          </DialogTitle>
+          <DialogDescription>From the start date they appear on that plant&apos;s attendance register. Workers who already have a plant are not changed.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <Field label="Plant" htmlFor="as-plant">
+            <select id="as-plant" className={selectClass} value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+              {options.projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Starts on" htmlFor="as-date">
+            <Input id="as-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          </Field>
+          {notOnPlant.length > 0 && (
+            <label className="flex items-start gap-2 rounded-lg bg-pending-soft p-3 text-sm">
+              <input type="checkbox" className="mt-0.5 size-4.5 accent-primary" checked={addContractor} onChange={(e) => setAddContractor(e.target.checked)} />
+              <span>
+                {notOnPlant.map((c) => names.get(c)).join(", ")} {notOnPlant.length === 1 ? "is" : "are"} not assigned to this plant yet. Also add{" "}
+                {notOnPlant.length === 1 ? "the contractor" : "these contractors"} to this plant from the start date.
+              </span>
+            </label>
+          )}
+        </div>
+        <DialogFooter>
+          <Button
+            disabled={pending || !projectId || (notOnPlant.length > 0 && !addContractor)}
+            onClick={() =>
+              run(() => assignWorkersAction({ workerIds: workers.map((w) => w.id), projectId, startDate: date, addContractorToPlant: addContractor }), {
+                success: (n) => `${n} ${n === 1 ? "worker" : "workers"} assigned`,
+                onSuccess: () => onClose(true),
+              })
+            }
+            data-testid="confirm-assign"
+          >
+            {pending && <Loader2 className="animate-spin" />} Assign to plant
           </Button>
         </DialogFooter>
       </DialogContent>

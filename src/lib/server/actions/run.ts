@@ -17,12 +17,15 @@ export function toActionError(e: unknown): { ok: false; error: string; code?: st
   return { ok: false, error: "Something went wrong on the server. Please try again.", code: "server" };
 }
 
-/** Runs a service call for a server action: authenticates, maps errors, refreshes pages. */
-export async function runAction<T>(fn: (ctx: ServiceContext) => Promise<T>): Promise<ActionResult<T>> {
+/**
+ * Runs a service call for a server action: authenticates, maps errors, refreshes
+ * pages (skip that with `revalidate: false` for read-only calls such as previews).
+ */
+export async function runAction<T>(fn: (ctx: ServiceContext) => Promise<T>, opts: { revalidate?: boolean } = {}): Promise<ActionResult<T>> {
   try {
     const ctx = await getContext();
     const data = await fn(ctx);
-    revalidatePath("/", "layout");
+    if (opts.revalidate !== false) revalidatePath("/", "layout");
     return { ok: true, data };
   } catch (e) {
     return toActionError(e);

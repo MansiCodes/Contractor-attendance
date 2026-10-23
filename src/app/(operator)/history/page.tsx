@@ -27,11 +27,11 @@ export default async function HistoryPage({ searchParams }: { searchParams: Sear
 
   return (
     <div className="space-y-6">
-      <PageHeader title="History" description="Daily totals for your sites over the last 31 days. Tap a day to see the register." />
+      <PageHeader title="History" description="Daily totals for your plants over the last 31 days. Tap a day to see the register." />
 
       {multiSite && (
-        <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4" role="list" aria-label="Filter by site">
-          {[{ id: null as string | null, label: "All my sites" }, ...projects.map((p) => ({ id: p.id as string | null, label: p.location.split(",")[0] }))].map((f) => {
+        <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4" role="list" aria-label="Filter by plant">
+          {[{ id: null as string | null, label: "All my plants" }, ...projects.map((p) => ({ id: p.id as string | null, label: p.name }))].map((f) => {
             const active = f.id === projectId;
             return (
               <Link

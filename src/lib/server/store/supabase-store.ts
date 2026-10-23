@@ -1,23 +1,44 @@
 import "server-only";
 import type { PostgrestError, SupabaseClient } from "@supabase/supabase-js";
 import { AppError, conflict, forbidden, invalid } from "@/lib/errors";
+import type { MasterImportWrite } from "@/lib/domain/master-import";
+import type { ConsentEvent, MessageStatus, MessagingSettings, OutboundMessage, WorkerContact } from "@/lib/domain/messaging";
 import type {
   Actor,
   AttendanceRecord,
   AuditLog,
   Contractor,
+  ContractorIdentityStatus,
   ContractorProjectAssignment,
+  ImportBatch,
   OperatorAccess,
   PaymentRule,
   Profile,
   Project,
   Worker,
   WorkerAssignment,
+  WorkerPayTerms,
 } from "@/lib/domain/types";
 import type { AttendancePolicyVersion, ResolvedPolicy } from "@/lib/domain/policy";
 import { createAdminSupabase } from "@/lib/supabase/server";
 import * as map from "./supabase-mappers";
-import type { AttendancePolicyFields, AttendanceQuery, AttendanceWrite, AuditQuery, DataStore, PaymentRuleFields, ProjectFields } from "./types";
+import type {
+  AttendancePolicyFields,
+  AttendanceQuery,
+  AttendanceWrite,
+  AuditQuery,
+  DataStore,
+  MasterImportResult,
+  MessageResult,
+  MessagingSettingsFields,
+  NewMessage,
+  PaymentRuleFields,
+  ProjectFields,
+  WorkerContactFields,
+  WorkerCreateFields,
+  WorkerPayTermsWrite,
+  WorkerUpdateFields,
+} from "./types";
 
 const PAGE = 1000;
 type Query = ReturnType<ReturnType<SupabaseClient["from"]>["select"]>;
@@ -37,7 +58,7 @@ export function mapDbError(error: PostgrestError | { message: string; code?: str
     case "23505":
       return conflict("This record already exists");
     case "23P01":
-      return conflict("These dates overlap an existing assignment");
+      return conflict("These dates overlap an existing plant assignment");
     case "23514":
       return invalid("The values entered are not allowed (check times and numbers)");
     case "23503":
@@ -117,6 +138,12 @@ export class SupabaseStore implements DataStore {
   async listPaymentRules(): Promise<PaymentRule[]> {
     return (await this.all<map.Row>("contractor_payment_rules")).map(map.paymentRule);
   }
+  async listWorkerPayTerms(): Promise<WorkerPayTerms[]> {
+    return (await this.all<map.Row>("worker_pay_terms")).map(map.workerPayTerms);
+  }
+  async listImportBatches(): Promise<ImportBatch[]> {
+    return (await this.all<map.Row>("import_batches")).map(map.importBatch);
+  }
   async listAttendancePolicies(): Promise<AttendancePolicyVersion[]> {
     return (await this.all<map.Row>("attendance_policies")).map(map.policyRow);
   }
@@ -141,11 +168,11 @@ export class SupabaseStore implements DataStore {
 
   // ---------- contractors & projects ----------
 
-  async createContractor(input: { name: string; location: string }, actor: Actor) {
+  async createContractor(input: { name: string; location: string | null }, actor: Actor) {
     const row = check(await this.db.from("contractors").insert({ ...input, created_by: actor.id }).select("*").single());
     return map.contractor(row);
   }
-  async updateContractor(id: string, input: { name: string; location: string; isActive: boolean }) {
+  async updateContractor(id: string, input: { name: string; location: string | null; isActive: boolean }) {
     check(await this.db.from("contractors").update({ name: input.name, location: input.location, is_active: input.isActive }).eq("id", id));
   }
   async setContractorPhoto(id: string, file: { bytes: Uint8Array; contentType: string }) {
@@ -154,6 +181,14 @@ export class SupabaseStore implements DataStore {
     const up = await this.db.storage.from(PHOTO_BUCKET).upload(path, file.bytes, { contentType: file.contentType, upsert: false });
     if (up.error) throw new AppError(`Photo upload failed: ${up.error.message}`, "config");
     check(await this.db.from("contractors").update({ photo_path: path }).eq("id", id));
+  }
+  async setContractorIdentity(id: string, input: { legalName: string | null; identityStatus: ContractorIdentityStatus; identityNote: string | null }) {
+    check(
+      await this.db
+        .from("contractors")
+        .update({ legal_name: input.legalName, identity_status: input.identityStatus, identity_note: input.identityNote })
+        .eq("id", id),
+    );
   }
   async createProject(input: ProjectFields, actor: Actor) {
     const row = check(await this.db.from("projects").insert({ ...map.projectFields(input), created_by: actor.id }).select("*").single());
@@ -175,7 +210,7 @@ export class SupabaseStore implements DataStore {
 
   // ---------- workers ----------
 
-  async createWorker(input: { fullName: string; contractorId: string; projectId: string; startDate: string; phone: string | null; notes: string | null }) {
+  async createWorker(input: WorkerCreateFields) {
     const row = check(
       await this.db
         .rpc("admin_create_worker", {
@@ -185,13 +220,28 @@ export class SupabaseStore implements DataStore {
           p_start_date: input.startDate,
           p_phone: input.phone,
           p_notes: input.notes,
+          p_employee_code: input.employeeCode,
+          p_department: input.department,
+          p_designation: input.designation,
         })
         .single(),
     );
     return map.worker(row as map.Row);
   }
-  async updateWorker(id: string, input: { fullName: string; phone: string | null; notes: string | null }) {
-    check(await this.db.from("workers").update({ full_name: input.fullName, phone: input.phone, notes: input.notes }).eq("id", id));
+  async updateWorker(id: string, input: WorkerUpdateFields) {
+    check(
+      await this.db
+        .from("workers")
+        .update({
+          full_name: input.fullName,
+          employee_code: input.employeeCode,
+          department: input.department,
+          designation: input.designation,
+          phone: input.phone,
+          notes: input.notes,
+        })
+        .eq("id", id),
+    );
   }
   async deactivateWorker(id: string, lastWorkingDate: string) {
     check(await this.db.rpc("admin_deactivate_worker", { p_worker_id: id, p_last_working_date: lastWorkingDate }));
@@ -208,6 +258,112 @@ export class SupabaseStore implements DataStore {
         p_effective_date: effectiveDate,
       }),
     );
+  }
+
+  async assignWorkers(workerIds: string[], projectId: string, startDate: string) {
+    return Number(check(await this.db.rpc("admin_assign_workers", { p_worker_ids: workerIds, p_project_id: projectId, p_start_date: startDate })));
+  }
+  async createWorkerPayTerms(inputs: WorkerPayTermsWrite[], actor: Actor) {
+    // One INSERT statement: all rows or none. Versions are set by the database trigger.
+    const rows = check(await this.db.from("worker_pay_terms").insert(inputs.map((i) => ({ ...map.workerPayTermsFields(i), created_by: actor.id }))).select("*")) as map.Row[];
+    return rows.map(map.workerPayTerms);
+  }
+  async applyMasterImport(write: MasterImportWrite): Promise<MasterImportResult> {
+    const r = check(await this.db.rpc("admin_import_worker_master", { p_payload: map.masterImportPayload(write) })) as map.Row;
+    return { batchId: r.batch_id, contractorIds: r.contractors ?? {}, created: Number(r.created), updated: Number(r.updated) };
+  }
+
+  // ---------- WhatsApp messaging ----------
+
+  async listWorkerContacts(): Promise<WorkerContact[]> {
+    const out: map.Row[] = [];
+    for (let from = 0; ; from += PAGE) {
+      const rows = check(await this.db.from("worker_contacts").select("*").order("worker_id").range(from, from + PAGE - 1)) as map.Row[];
+      out.push(...rows);
+      if (rows.length < PAGE) break;
+    }
+    return out.map(map.workerContact);
+  }
+  async saveWorkerContacts(items: WorkerContactFields[]) {
+    // One statement: all or none. The database stamps the change and logs consent changes.
+    if (items.length > 0) check(await this.db.from("worker_contacts").upsert(items.map(map.workerContactFields), { onConflict: "worker_id" }));
+  }
+  async listConsentEvents(workerId?: string): Promise<ConsentEvent[]> {
+    let q = this.db.from("worker_consent_events").select("*");
+    if (workerId) q = q.eq("worker_id", workerId);
+    return (check(await q.order("id", { ascending: false }).limit(1000)) as map.Row[]).map(map.consentEvent);
+  }
+  async getMessagingSettings(): Promise<MessagingSettings | null> {
+    const row = check(await this.db.from("messaging_settings").select("*").eq("id", 1).maybeSingle());
+    return row ? map.messagingSettings(row) : null;
+  }
+  async saveMessagingSettings(input: MessagingSettingsFields, actor: Actor) {
+    const row = check(await this.db.from("messaging_settings").upsert({ ...map.messagingSettingsFields(input), updated_by: actor.id, updated_at: new Date().toISOString() }).select("*").single());
+    return map.messagingSettings(row);
+  }
+  async setLastScheduledRun(date: string) {
+    check(await this.db.from("messaging_settings").update({ last_scheduled_run: date }).eq("id", 1));
+  }
+  async listMessages(q: { limit: number; statuses?: MessageStatus[] }): Promise<OutboundMessage[]> {
+    // Newest first, in pages (PostgREST returns at most 1000 rows per request).
+    const out: map.Row[] = [];
+    for (let from = 0; from < q.limit; from += PAGE) {
+      let query = this.db.from("outbound_messages").select("*");
+      if (q.statuses) query = query.in("status", q.statuses);
+      const rows = check(await query.order("created_at", { ascending: false }).order("id", { ascending: false }).range(from, Math.min(from + PAGE, q.limit) - 1)) as map.Row[];
+      out.push(...rows);
+      if (rows.length < Math.min(PAGE, q.limit - from)) break;
+    }
+    return out.map(map.outboundMessage);
+  }
+  async enqueueMessages(items: NewMessage[], actor: Actor | null): Promise<OutboundMessage[]> {
+    if (items.length === 0) return [];
+    // The unique idempotency key makes a repeated message a no-op.
+    const rows = check(
+      await this.db
+        .from("outbound_messages")
+        .upsert(items.map((m) => map.newMessageRow(m, actor?.id ?? null)), { onConflict: "idempotency_key", ignoreDuplicates: true })
+        .select("*"),
+    ) as map.Row[];
+    return rows.map(map.outboundMessage);
+  }
+  async claimDueMessages(now: string, limit: number): Promise<OutboundMessage[]> {
+    return ((check(await this.db.rpc("messaging_claim_due", { p_now: now, p_limit: limit })) ?? []) as map.Row[]).map(map.outboundMessage);
+  }
+  async claimMessage(id: string, now: string): Promise<OutboundMessage | null> {
+    const row = check(
+      await this.db.from("outbound_messages").update({ status: "sending", updated_at: now }).eq("id", id).eq("status", "queued").select("*").maybeSingle(),
+    );
+    return row ? map.outboundMessage(row as map.Row) : null;
+  }
+  async refreshMessage(id: string, patch: Pick<OutboundMessage, "to" | "language" | "params" | "body" | "attendanceVersion">) {
+    check(
+      await this.db
+        .from("outbound_messages")
+        .update({ to_number: patch.to, language: patch.language, params: patch.params, body: patch.body, attendance_version: patch.attendanceVersion })
+        .eq("id", id)
+        .eq("status", "sending"),
+    );
+  }
+  async completeMessage(id: string, result: MessageResult) {
+    const patch =
+      result.status === "sent"
+        ? { status: "sent", provider_message_id: result.providerMessageId, transport: result.transport, sent_at: result.at, last_error: null, next_attempt_at: null, updated_at: result.at }
+        : { status: result.status, last_error: result.error, next_attempt_at: result.nextAttemptAt, transport: result.transport, updated_at: result.at };
+    check(await this.db.from("outbound_messages").update(patch).eq("id", id));
+    // Statuses that arrived before the provider id was saved are applied now.
+    if (result.status === "sent") check(await this.db.rpc("messaging_replay_statuses", { p_provider_message_id: result.providerMessageId }));
+  }
+  async applyMessageStatus(providerMessageId: string, status: "sent" | "delivered" | "read" | "failed", at: string, error: string | null, payload?: unknown) {
+    return Boolean(
+      check(await this.db.rpc("messaging_apply_status", { p_provider_message_id: providerMessageId, p_status: status, p_at: at, p_error: error, p_payload: payload ?? {} })),
+    );
+  }
+  async requeueFailed() {
+    const rows = check(
+      await this.db.from("outbound_messages").update({ status: "queued", next_attempt_at: null, attempts: 0, updated_at: new Date().toISOString() }).eq("status", "failed").select("id"),
+    ) as map.Row[];
+    return rows.length;
   }
 
   // ---------- operators ----------
@@ -281,6 +437,7 @@ export class SupabaseStore implements DataStore {
           check_in_at: i.checkInAt,
           check_out_at: i.checkOutAt,
           check_in_source: i.checkInSource,
+          shift: i.shift,
           method: i.method,
           expected_version: i.expectedVersion,
         })),

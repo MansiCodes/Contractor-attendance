@@ -47,11 +47,11 @@ export function AddProjectDialog({ defaultTimezone }: { defaultTimezone: string 
   });
   const submit = form.handleSubmit((v) =>
     run(() => createProjectAction(v), {
-      success: "Project created",
+      success: "Plant created",
       onSuccess: (id) => {
         setOpen(false);
         form.reset();
-        router.push(`/admin/projects/${id}`);
+        router.push(`/admin/plants/${id}`);
       },
     }),
   );
@@ -59,19 +59,19 @@ export function AddProjectDialog({ defaultTimezone }: { defaultTimezone: string 
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button>
-          <Plus /> Add project
+          <Plus /> Add plant
         </Button>
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Add project site</DialogTitle>
+          <DialogTitle>Add manufacturing plant</DialogTitle>
           <DialogDescription>Assign contractors, workers and operators after saving.</DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4" noValidate>
-          <Field label="Project name" htmlFor="p-name" error={form.formState.errors.name?.message}>
+          <Field label="Plant name" htmlFor="p-name" error={form.formState.errors.name?.message}>
             <Input id="p-name" {...form.register("name")} />
           </Field>
-          <Field label="Location" htmlFor="p-loc" hint="City, State" error={form.formState.errors.location?.message}>
+          <Field label="Location" htmlFor="p-loc" hint="Unit, shed or campus" error={form.formState.errors.location?.message}>
             <Input id="p-loc" {...form.register("location")} />
           </Field>
           <Field label="Timezone" htmlFor="p-tz" hint="Attendance dates and times use this zone. It is locked once attendance is recorded." error={form.formState.errors.timezone?.message}>
@@ -81,7 +81,7 @@ export function AddProjectDialog({ defaultTimezone }: { defaultTimezone: string 
           </Field>
           <DialogFooter>
             <Button type="submit" disabled={pending}>
-              {pending && <Loader2 className="animate-spin" />} Create project
+              {pending && <Loader2 className="animate-spin" />} Create plant
             </Button>
           </DialogFooter>
         </form>
@@ -90,7 +90,7 @@ export function AddProjectDialog({ defaultTimezone }: { defaultTimezone: string 
   );
 }
 
-/** Name, location, timezone and status. Attendance rules for the site live in Settings → Attendance. */
+/** Name, location, timezone and status. Attendance rules for the plant live in Settings. */
 export function ProjectSettingsForm({ project, timezoneLocked }: { project: Project; timezoneLocked: boolean }) {
   const { pending, run } = useServerAction();
   const form = useForm<ProjectValues>({
@@ -104,7 +104,7 @@ export function ProjectSettingsForm({ project, timezoneLocked }: { project: Proj
   return (
     <form onSubmit={submit} className="space-y-4 rounded-xl bg-card p-4 shadow-surface" noValidate>
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Project name" htmlFor="ps-name" error={e.name?.message}>
+        <Field label="Plant name" htmlFor="ps-name" error={e.name?.message}>
           <Input id="ps-name" {...form.register("name")} />
         </Field>
         <Field label="Location" htmlFor="ps-loc" error={e.location?.message}>
@@ -113,7 +113,7 @@ export function ProjectSettingsForm({ project, timezoneLocked }: { project: Proj
         <Field
           label="Timezone"
           htmlFor="ps-tz"
-          hint={timezoneLocked ? "Locked: attendance has already been recorded at this site." : "Attendance dates and times use this zone. It locks once attendance is recorded."}
+          hint={timezoneLocked ? "Locked: attendance has already been recorded at this plant." : "Attendance dates and times use this zone. It locks once attendance is recorded."}
           error={e.timezone?.message}
         >
           {timezoneLocked ? (
@@ -133,7 +133,7 @@ export function ProjectSettingsForm({ project, timezoneLocked }: { project: Proj
         <div className="space-y-1.5">
           <span className="text-sm font-medium">Attendance rules</span>
           <Link
-            href={`/admin/settings?site=${project.id}`}
+            href={`/admin/settings?plant=${project.id}`}
             className="flex h-11 items-center justify-between rounded-lg border border-input bg-card px-3 text-sm font-medium transition-colors hover:bg-muted"
           >
             Suggested IN, shifts, edit window <ArrowRight className="size-4 text-muted-foreground" />
@@ -142,8 +142,8 @@ export function ProjectSettingsForm({ project, timezoneLocked }: { project: Proj
       </div>
       <div className="grid gap-2 sm:grid-cols-2">
         <ToggleRow
-          label="Site active"
-          description="Inactive sites are hidden from operators."
+          label="Plant active"
+          description="Inactive plants are hidden from operators."
           checked={!!isActive}
           onCheckedChange={(v) => form.setValue("isActive", v, { shouldDirty: true })}
         />
@@ -190,7 +190,7 @@ export function RemoveContractorButton({ assignmentId, name }: { assignmentId: s
         size="icon"
         className="text-muted-foreground hover:bg-absent-soft hover:text-absent"
         disabled={pending}
-        aria-label={`Remove ${name} from this project`}
+        aria-label={`Remove ${name} from this plant`}
         onClick={() => setOpen(true)}
       >
         <X className="size-4" />
@@ -200,7 +200,7 @@ export function RemoveContractorButton({ assignmentId, name }: { assignmentId: s
           <AlertDialogHeader>
             <AlertDialogTitle>End {name}&apos;s assignment?</AlertDialogTitle>
             <AlertDialogDescription>
-              From today, {name} no longer appears on this project&apos;s register. Past attendance is kept.
+              From today, {name} no longer appears on this plant&apos;s register. Past attendance is kept.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -274,7 +274,7 @@ export function AddOperatorDialog({ live }: { live: boolean }) {
   const e = form.formState.errors;
   const submit = form.handleSubmit((v) =>
     run(() => createOperatorAction(live ? v : { fullName: v.fullName, email: v.email }), {
-      success: "Operator added. Now grant access to their sites.",
+      success: "Operator added. Now grant access to their plants.",
       onSuccess: () => {
         setOpen(false);
         form.reset();

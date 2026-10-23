@@ -5,9 +5,10 @@ import { AttendanceRegister } from "@/components/attendance/register";
 import { EmptyState, Group, SegmentedLinks, StatusPill, type Tone } from "@/components/kit";
 import { Button } from "@/components/ui/button";
 import { loadRegister } from "@/lib/server/services/attendance";
-import { getAuditLog, getReport } from "@/lib/server/services/reports";
+import { getAuditLog, getPayroll, getReport } from "@/lib/server/services/reports";
+import { PayrollView } from "@/components/admin/payroll-view";
 import { requirePageContext } from "@/lib/server/session";
-import { formatINR, payableLabel, type ReportGroup, type ReportRow } from "@/lib/domain/report";
+import { formatINR, payableLabel, type PlantGroup, type ReportGroup, type ReportRow } from "@/lib/domain/report";
 import { addDays, formatDateShort, formatMinutes, formatTime12, instantToLocal, isValidDate, monthRange } from "@/lib/domain/time";
 import { headOfficeTimezone, headOfficeToday } from "@/lib/server/services/context";
 import type { AttendanceSnapshot } from "@/lib/domain/types";
@@ -20,6 +21,7 @@ type Search = Promise<Record<string, string | undefined>>;
 const TABS = [
   { key: "register", label: "Register" },
   { key: "report", label: "Reports" },
+  { key: "payroll", label: "Payroll" },
   { key: "log", label: "Change log" },
 ] as const;
 
@@ -33,6 +35,7 @@ export default async function AdminAttendancePage({ searchParams }: { searchPara
       <SegmentedLinks label="Attendance views" items={TABS.map((t) => ({ href: `/admin/attendance?tab=${t.key}`, label: t.label, active: tab === t.key }))} />
       {tab === "register" && <RegisterTab sp={sp} ctx={ctx} />}
       {tab === "report" && <ReportTab sp={sp} ctx={ctx} />}
+      {tab === "payroll" && <PayrollTab sp={sp} ctx={ctx} />}
       {tab === "log" && <LogTab sp={sp} ctx={ctx} />}
     </div>
   );
@@ -41,10 +44,10 @@ export default async function AdminAttendancePage({ searchParams }: { searchPara
 type Ctx = Awaited<ReturnType<typeof requirePageContext>>;
 
 async function RegisterTab({ sp, ctx }: { sp: Record<string, string | undefined>; ctx: Ctx }) {
-  const view = await loadRegister(ctx, { projectId: sp.project, contractorId: sp.contractor, date: sp.date });
+  const view = await loadRegister(ctx, { projectId: sp.project, contractorId: sp.contractor, date: sp.date, shift: sp.shift });
   return (
     <AttendanceRegister
-      key={`${view.project?.id}:${view.contractorId}:${view.date}`}
+      key={`${view.project?.id}:${view.contractorId}:${view.date}:${view.shift}`}
       view={view}
       basePath="/admin/attendance"
       extraQuery={{ tab: "register" }}
@@ -71,7 +74,7 @@ function GroupTable({ groups, withProject }: { groups: ReportGroup[]; withProjec
           <thead>
             <tr className="border-b text-left">
               <th className={th}>Contractor</th>
-              {withProject ? <th className={th}>Project</th> : <th className={cn(th, "text-right")}>Sites</th>}
+              {withProject ? <th className={th}>Plant</th> : <th className={cn(th, "text-right")}>Plants</th>}
               <th className={cn(th, "text-right")}>Workers</th>
               <th className={cn(th, "text-right")}>Present</th>
               <th className={cn(th, "text-right")}>Absent</th>
@@ -114,7 +117,7 @@ function GroupTable({ groups, withProject }: { groups: ReportGroup[]; withProjec
                 <div className="min-w-0">
                   <div className="truncate text-md font-semibold">{g.contractorName}</div>
                   <div className="truncate text-xs text-muted-foreground">
-                    {withProject ? g.projectName : `${g.sites} ${g.sites === 1 ? "site" : "sites"}`} · {g.totals.workers} workers
+                    {withProject ? g.projectName : `${g.sites} ${g.sites === 1 ? "plant" : "plants"}`} · {g.totals.workers} workers
                   </div>
                 </div>
                 <span className={cn("tabular shrink-0 text-sm font-semibold", label === "Not configured" && "font-normal text-muted-foreground italic")}>{label}</span>
@@ -141,6 +144,64 @@ function GroupTable({ groups, withProject }: { groups: ReportGroup[]; withProjec
             </li>
           );
         })}
+      </Group>
+    </>
+  );
+}
+
+/** Plant-wise totals: every contractor working at each plant. */
+function PlantTable({ plants }: { plants: PlantGroup[] }) {
+  if (plants.length === 0) return <EmptyState title="No attendance in this period" description="Try a wider date range or a different filter." />;
+  return (
+    <>
+      <div className="hidden overflow-x-auto rounded-xl bg-card shadow-surface md:block">
+        <table className="w-full text-sm" data-testid="plant-totals">
+          <thead>
+            <tr className="border-b text-left">
+              <th className={th}>Plant</th>
+              <th className={cn(th, "text-right")}>Contractors</th>
+              <th className={cn(th, "text-right")}>Workers</th>
+              <th className={cn(th, "text-right")}>Present</th>
+              <th className={cn(th, "text-right")}>Absent</th>
+              <th className={cn(th, "text-right")}>Pending</th>
+              <th className={cn(th, "text-right")}>No OUT</th>
+              <th className={cn(th, "text-right")}>Hours</th>
+              <th className={cn(th, "text-right")}>Est. payable</th>
+            </tr>
+          </thead>
+          <tbody className="tabular divide-y">
+            {plants.map((g) => (
+              <tr key={g.key} className="transition-colors hover:bg-muted/50">
+                <td className={cn(td, "font-medium whitespace-nowrap")}>{g.projectName}</td>
+                <td className={cn(td, "text-right")}>{g.contractors}</td>
+                <td className={cn(td, "text-right")}>{g.totals.workers}</td>
+                <td className={cn(td, "text-right")}>{g.totals.presentDays}</td>
+                <td className={cn(td, "text-right whitespace-nowrap")}>
+                  {g.totals.absentDays}
+                  {g.totals.notMarkedAbsentDays > 0 && <span className="text-xs text-absent"> +{g.totals.notMarkedAbsentDays} not marked</span>}
+                </td>
+                <td className={cn(td, "text-right", g.totals.pendingDays > 0 && "font-semibold text-pending")}>{g.totals.pendingDays}</td>
+                <td className={cn(td, "text-right")}>{g.totals.incompleteDays}</td>
+                <td className={cn(td, "text-right")}>{hours(g.totals.netHours)}</td>
+                <td className={cn(td, "text-right font-medium whitespace-nowrap")}>{payableLabel(g.totals, g.contractorsWithRules > 0)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <Group as="ul" className="md:hidden">
+        {plants.map((g) => (
+          <li key={g.key} className="space-y-1 px-4 py-3">
+            <div className="flex items-baseline justify-between gap-3">
+              <span className="truncate text-md font-semibold">{g.projectName}</span>
+              <span className="tabular shrink-0 text-sm font-semibold">{payableLabel(g.totals, g.contractorsWithRules > 0)}</span>
+            </div>
+            <div className="tabular text-xs text-muted-foreground">
+              {g.contractors} {g.contractors === 1 ? "contractor" : "contractors"} · {g.totals.workers} workers · {g.totals.presentDays} present ·{" "}
+              {g.totals.absentDays + g.totals.notMarkedAbsentDays} absent · {g.totals.pendingDays} pending · {hours(g.totals.netHours)} h
+            </div>
+          </li>
+        ))}
       </Group>
     </>
   );
@@ -177,7 +238,22 @@ function StatusCell({ r }: { r: ReportRow }) {
 function amountCell(r: ReportRow) {
   if (r.calc.amountState === "ok" && r.calc.amount !== null) return formatINR(r.calc.amount);
   if (r.calc.amountState === "not_configured") return <span className="text-muted-foreground italic">Not configured</span>;
+  if (r.calc.amountState === "needs_configuration")
+    return (
+      <span className="text-pending italic" title={`Missing: ${r.calc.missing.join(", ")}`}>
+        Needs configuration
+      </span>
+    );
   return "—";
+}
+
+async function PayrollTab({ sp, ctx }: { sp: Record<string, string | undefined>; ctx: Ctx }) {
+  const today = await headOfficeToday(ctx);
+  const month = sp.month && /^\d{4}-\d{2}$/.test(sp.month) ? sp.month : today.slice(0, 7);
+  const contractorId = sp.contractor || null;
+  const payroll = await getPayroll(ctx, { month, contractorId });
+  const contractor = contractorId ? payroll.contractors.find((c) => c.contractorId === contractorId) ?? null : "all";
+  return <PayrollView payroll={payroll} month={month} contractor={contractor} />;
 }
 
 async function ReportTab({ sp, ctx }: { sp: Record<string, string | undefined>; ctx: Ctx }) {
@@ -245,9 +321,9 @@ async function ReportTab({ sp, ctx }: { sp: Record<string, string | undefined>; 
             <input type="date" name="to" defaultValue={to} className={field} />
           </label>
           <label className="col-span-2 space-y-1 text-xs font-medium text-muted-foreground md:col-span-1">
-            Project
+            Plant
             <select name="project" defaultValue={projectId ?? ""} className={cn(field, "select-native")}>
-              <option value="">All projects</option>
+              <option value="">All plants</option>
               {projects.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
@@ -283,6 +359,7 @@ async function ReportTab({ sp, ctx }: { sp: Record<string, string | undefined>; 
           <strong className="font-semibold text-absent">{t.absentDays}</strong> absent · <strong className={cn("font-semibold", t.pendingDays > 0 ? "text-pending" : "text-foreground")}>{t.pendingDays}</strong>{" "}
           pending{t.notMarkedAbsentDays > 0 && <> · <strong className="font-semibold text-absent">{t.notMarkedAbsentDays}</strong> absent – not marked</>} ·{" "}
           <strong className="font-semibold text-foreground">{hours(t.netHours)}</strong> hrs · Est. <strong className="font-semibold text-foreground">{formatINR(t.amount)}</strong>
+          {t.needsConfigDays > 0 && <span className="text-pending"> + {t.needsConfigDays} day(s) need configuration (not included)</span>}
           {t.unconfiguredDays > 0 && ` (+${t.unconfiguredDays} days not configured)`}
         </p>
       </div>
@@ -292,7 +369,11 @@ async function ReportTab({ sp, ctx }: { sp: Record<string, string | undefined>; 
         <GroupTable groups={report.byContractor} withProject={false} />
       </section>
       <section className="space-y-2.5">
-        <h3 className="text-sm font-semibold">By contractor and project</h3>
+        <h3 className="text-sm font-semibold">By plant</h3>
+        <PlantTable plants={report.byProject} />
+      </section>
+      <section className="space-y-2.5">
+        <h3 className="text-sm font-semibold">By contractor and plant</h3>
         <GroupTable groups={report.byContractorProject} withProject />
       </section>
 
@@ -316,7 +397,7 @@ async function ReportTab({ sp, ctx }: { sp: Record<string, string | undefined>; 
                     <th className={th}>Date</th>
                     <th className={th}>Worker</th>
                     <th className={th}>Contractor</th>
-                    <th className={th}>Project</th>
+                    <th className={th}>Plant</th>
                     <th className={th}>Status</th>
                     <th className={th}>IN</th>
                     <th className={th}>OUT</th>
@@ -424,9 +505,9 @@ async function LogTab({ sp, ctx }: { sp: Record<string, string | undefined>; ctx
           <input type="date" name="to" defaultValue={to} className={field} />
         </label>
         <label className="col-span-2 space-y-1 text-xs font-medium text-muted-foreground md:col-span-1">
-          Project
+          Plant
           <select name="project" defaultValue={projectId ?? ""} className={cn(field, "select-native")}>
-            <option value="">All projects</option>
+            <option value="">All plants</option>
             {projects.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}

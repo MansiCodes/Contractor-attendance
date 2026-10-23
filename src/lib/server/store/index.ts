@@ -18,3 +18,17 @@ export async function getStore(): Promise<DataStore> {
   ]);
   return new SupabaseStore(await createServerSupabase());
 }
+
+/**
+ * Store for server jobs with no signed-in user: the scheduled WhatsApp dispatcher
+ * and the provider webhook. In live mode it uses the service role (no RLS), so it
+ * is only ever called after the job's own secret has been verified.
+ */
+export async function getServiceStore(): Promise<DataStore> {
+  if (getAppMode() === "demo") {
+    const { getDemoStore } = await import("./demo-store");
+    return getDemoStore();
+  }
+  const [{ createAdminSupabase }, { SupabaseStore }] = await Promise.all([import("@/lib/supabase/server"), import("./supabase-store")]);
+  return new SupabaseStore(createAdminSupabase());
+}

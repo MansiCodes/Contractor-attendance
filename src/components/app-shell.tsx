@@ -34,7 +34,7 @@ export function AppShell({ actor, nav, children }: { actor: Actor; nav: "operato
           <nav className="hidden md:ml-1 md:block lg:ml-4" aria-label="Main">
             <NavLinks items={items} variant="top" />
           </nav>
-          <div className="ml-auto">
+          <div className="ml-auto flex min-w-0 justify-end">
             <UserMenu name={actor.fullName} role={actor.role} demo={demo} />
           </div>
         </div>

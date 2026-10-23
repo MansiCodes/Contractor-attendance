@@ -3,7 +3,7 @@ import Link from "next/link";
 import { AlertTriangle, Info, Lock, MapPin } from "lucide-react";
 import { PolicyForm } from "@/components/admin/policy-form";
 import { describePolicyValue, describeVersion, FIELD_LABELS } from "@/components/admin/policy-text";
-import { EmptyState, Group, PageHeader, Section, StatusPill } from "@/components/kit";
+import { EmptyState, Group, PageHeader, Section, SegmentedLinks, StatusPill } from "@/components/kit";
 import { buttonVariants } from "@/components/ui/button";
 import { POLICY_FIELDS } from "@/lib/domain/policy";
 import { formatDateLong, formatDateShort, instantToLocal } from "@/lib/domain/time";
@@ -12,7 +12,7 @@ import { requirePageContext } from "@/lib/server/session";
 
 export const metadata: Metadata = { title: "Attendance settings" };
 
-type Search = Promise<{ edit?: string; site?: string }>;
+type Search = Promise<{ edit?: string; plant?: string }>;
 
 // Admin only: the admin layout redirects everyone else, and loadSettings() and the
 // save action re-check the role on the server.
@@ -21,14 +21,21 @@ export default async function SettingsPage({ searchParams }: { searchParams: Sea
   const sp = await searchParams;
   const view = await loadSettings(ctx);
   const editingCompany = sp.edit === "company";
-  const editingSite = sp.site ?? null;
+  const editingSite = sp.plant ?? null;
   const projectName = new Map(view.sites.map((s) => [s.project.id, s.project.name]));
 
   return (
     <div className="space-y-8">
+      <SegmentedLinks
+        label="Settings sections"
+        items={[
+          { href: "/admin/settings", label: "Attendance rules", active: true },
+          { href: "/admin/settings/whatsapp", label: "WhatsApp", active: false },
+        ]}
+      />
       <PageHeader
         title="Attendance settings"
-        description="Company-wide rules, with optional overrides per site. Each change is saved as a new version from a start date."
+        description="Company-wide rules, with optional overrides per plant. Each change is saved as a new version from a start date."
       />
 
       <div className="flex items-start gap-2.5 rounded-xl bg-muted px-3.5 py-3 text-sm">
@@ -42,7 +49,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Sea
       <Section
         id="company"
         title="Company defaults"
-        description={`Apply to every site unless the site overrides them${view.company.current ? ` · version ${view.company.current.version}` : ""}`}
+        description={`Apply to every plant unless the plant overrides them${view.company.current ? ` · version ${view.company.current.version}` : ""}`}
         actions={
           !editingCompany && (
             <Link href="/admin/settings?edit=company#company" className={buttonVariants({ variant: "outline" })} data-testid="edit-company">
@@ -70,7 +77,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Sea
               </li>
             ))}
             <li className="flex items-baseline justify-between gap-3 px-4 py-2.5">
-              <span className="text-muted-foreground">Timezone for new sites</span>
+              <span className="text-muted-foreground">Timezone for new plants</span>
               <span className="text-right font-medium">{view.company.defaultTimezone}</span>
             </li>
           </Group>
@@ -82,16 +89,16 @@ export default async function SettingsPage({ searchParams }: { searchParams: Sea
         )}
       </Section>
 
-      <Section title="Sites" description="Each site uses the company defaults except where it overrides them.">
+      <Section title="Plants" description="Each plant uses the company defaults except where it overrides them.">
         {view.sites.length === 0 ? (
-          <EmptyState icon={MapPin} title="No project sites yet" />
+          <EmptyState icon={MapPin} title="No plants yet" />
         ) : (
           <Group as="ul">
             {view.sites.map((s) => {
               const overrides = POLICY_FIELDS.filter((f) => s.effective.source[f] === "site");
               const editing = editingSite === s.project.id;
               return (
-                <li key={s.project.id} id={`site-${s.project.id}`} className="space-y-3 px-4 py-3.5" data-testid="settings-site">
+                <li key={s.project.id} id={`plant-${s.project.id}`} className="space-y-3 px-4 py-3.5" data-testid="settings-site">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
@@ -108,8 +115,8 @@ export default async function SettingsPage({ searchParams }: { searchParams: Sea
                       </div>
                     </div>
                     {!editing && (
-                      <Link href={`/admin/settings?site=${s.project.id}#site-${s.project.id}`} className={buttonVariants({ variant: "outline", size: "sm" })}>
-                        Edit site rules
+                      <Link href={`/admin/settings?plant=${s.project.id}#plant-${s.project.id}`} className={buttonVariants({ variant: "outline", size: "sm" })}>
+                        Edit plant rules
                       </Link>
                     )}
                   </div>
@@ -119,7 +126,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Sea
                       snapshots={s.snapshots}
                       versionDates={s.versionDates}
                       today={s.today}
-                      closeHref={`/admin/settings#site-${s.project.id}`}
+                      closeHref={`/admin/settings#plant-${s.project.id}`}
                     />
                   ) : (
                     <p className="text-sm" data-testid="site-overrides">
@@ -162,7 +169,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Sea
               <li key={v.id} className="space-y-1 px-4 py-3">
                 <div className="flex flex-wrap items-baseline justify-between gap-x-3">
                   <span className="font-semibold">
-                    {isCompany ? "Company defaults" : projectName.get(v.projectId!) ?? "Site"} · version {v.version}
+                    {isCompany ? "Company defaults" : projectName.get(v.projectId!) ?? "Plant"} · version {v.version}
                   </span>
                   <span className="tabular text-xs text-muted-foreground">
                     in force from {formatDateLong(v.effectiveFrom)} · saved {formatDateShort(at.date)} {at.time}

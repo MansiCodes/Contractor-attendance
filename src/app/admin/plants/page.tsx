@@ -12,14 +12,14 @@ import { newSiteTimezone } from "@/lib/server/services/settings";
 import { requirePageContext } from "@/lib/server/session";
 import { cn } from "@/lib/utils";
 
-export const metadata: Metadata = { title: "Projects" };
+export const metadata: Metadata = { title: "Plants" };
 
 type Search = Promise<{ tab?: string }>;
 
 export default async function ProjectsPage({ searchParams }: { searchParams: Search }) {
   const ctx = await requirePageContext("admin");
   const sp = await searchParams;
-  const tab = sp.tab === "operators" ? "operators" : "sites";
+  const tab = sp.tab === "operators" ? "operators" : "plants";
   const [dir, today, defaultTimezone] = await Promise.all([adminDirectory(ctx), dailySummaries(ctx, { days: 1 }), newSiteTimezone(ctx)]);
   const contractorById = new Map(dir.contractors.map((c) => [c.id, c]));
   const projects = [...dir.projects].sort((a, b) => Number(b.isActive) - Number(a.isActive) || a.name.localeCompare(b.name));
@@ -30,22 +30,22 @@ export default async function ProjectsPage({ searchParams }: { searchParams: Sea
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Projects"
-        description="Government project sites and who records attendance there."
-        actions={tab === "sites" ? <AddProjectDialog defaultTimezone={defaultTimezone} /> : <AddOperatorDialog live={getAppMode() === "live"} />}
+        title="Plants"
+        description="Manufacturing plants, the contractors working in them, and who records attendance there."
+        actions={tab === "plants" ? <AddProjectDialog defaultTimezone={defaultTimezone} /> : <AddOperatorDialog live={getAppMode() === "live"} />}
       />
 
       <SegmentedLinks
-        label="Project sections"
+        label="Plant sections"
         items={[
-          { href: "/admin/projects?tab=sites", label: "Project sites", active: tab === "sites", count: projects.length },
-          { href: "/admin/projects?tab=operators", label: "Attendance operators", active: tab === "operators", count: operators.length },
+          { href: "/admin/plants?tab=plants", label: "Manufacturing plants", active: tab === "plants", count: projects.length },
+          { href: "/admin/plants?tab=operators", label: "Plant attendance operators", active: tab === "operators", count: operators.length },
         ]}
       />
 
-      {tab === "sites" ? (
+      {tab === "plants" ? (
         projects.length === 0 ? (
-          <EmptyState icon={MapPin} title="No project sites yet" description="Add a site, then assign contractors and operators to it." />
+          <EmptyState icon={MapPin} title="No plants yet" description="Add a plant, then assign contractors and operators to it." />
         ) : (
           <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {projects.map((p) => {
@@ -62,7 +62,7 @@ export default async function ProjectsPage({ searchParams }: { searchParams: Sea
               return (
                 <li key={p.id} className="min-w-0">
                   <Link
-                    href={`/admin/projects/${p.id}`}
+                    href={`/admin/plants/${p.id}`}
                     className={cn("flex h-full flex-col rounded-xl bg-card p-4 shadow-surface transition-shadow hover:shadow-raised", !p.isActive && "opacity-70")}
                     data-testid="project-card"
                   >
@@ -111,7 +111,7 @@ export default async function ProjectsPage({ searchParams }: { searchParams: Sea
           </ul>
         )
       ) : operators.length === 0 ? (
-        <EmptyState icon={UserRound} title="No operators yet" description="Add the people who record attendance at each site." />
+        <EmptyState icon={UserRound} title="No operators yet" description="Add the people who record attendance at each plant." />
       ) : (
         <ul className="grid gap-3 lg:grid-cols-2">
           {operators.map((u) => (

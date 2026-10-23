@@ -1,10 +1,10 @@
 import { conflict, forbidden, invalid, staleSettings } from "@/lib/errors";
-import { FALLBACK_TIMEZONE, evaluateEntry, operatorEditClosesAt, type PolicyValues, type ResolvedPolicy } from "@/lib/domain/policy";
+import { FALLBACK_TIMEZONE, evaluateEntry, operatorEditClosesAt, policyForShift, type PolicyValues, type ResolvedPolicy } from "@/lib/domain/policy";
 import { assignmentCovers, registerEntries } from "@/lib/domain/register";
 import { buildReport } from "@/lib/domain/report";
 import { attendanceBatch } from "@/lib/domain/schemas";
 import { addDays, formatTime12, instantToLocal, isValidDate, nowTimeIn, todayIn } from "@/lib/domain/time";
-import type { AttendanceRecord, AttendanceStatus, ChangeMethod, CheckInSource, Project } from "@/lib/domain/types";
+import type { AttendanceRecord, AttendanceStatus, ChangeMethod, CheckInSource, Project, Shift } from "@/lib/domain/types";
 import type { AttendanceWrite } from "../store/types";
 import { accessibleProjectIds, accessibleProjects, assertProjectAccess, canEditDate, sitePolicies, type ServiceContext } from "./context";
 
@@ -21,6 +21,7 @@ export interface SavedEntryDTO {
   checkInAt: string | null;
   checkOutAt: string | null;
   checkInSource: CheckInSource | null;
+  shift: Shift;
   version: number;
   method: ChangeMethod;
 }
@@ -28,6 +29,8 @@ export interface SavedEntryDTO {
 export interface RegisterRowDTO {
   workerId: string;
   workerCode: string;
+  /** the contractor's own employee ID: the matching key on paper registers */
+  employeeCode: string | null;
   workerName: string;
   contractorId: string;
   assigned: boolean;
@@ -36,7 +39,7 @@ export interface RegisterRowDTO {
 
 /** The site's rules as the register needs them (effective values only: no history or notes). */
 export interface RegisterPolicyDTO {
-  /** in force on the register date */
+  /** in force on the register date, as it applies to the register's shift */
   day: PolicyValues;
   /** in force on the site's today */
   capture: Pick<PolicyValues, "inFutureToleranceMin" | "outFutureToleranceMin" | "operatorBackdateDays" | "editCutoffTime">;
@@ -55,11 +58,15 @@ export interface RegisterView {
   contractors: { id: string; name: string; photoUrl: string | null; workerCount: number }[];
   contractorId: string | null;
   date: string;
+  /** the register shows this shift: its records, plus workers with nothing recorded yet */
+  shift: Shift;
   today: string;
   nowTime: string;
   editable: boolean;
   readOnlyReason: string | null;
   rows: RegisterRowDTO[];
+  /** workers already recorded on the other shift that day (not on this register) */
+  otherShift: { workerId: string; workerName: string; employeeCode: string | null; workerCode: string; status: AttendanceStatus }[];
 }
 
 function toSavedDTO(r: AttendanceRecord, timezone: string): SavedEntryDTO {
@@ -68,7 +75,7 @@ function toSavedDTO(r: AttendanceRecord, timezone: string): SavedEntryDTO {
   return {
     recordId: r.id, status: r.status, checkIn: inL?.time ?? null, checkOut: outL?.time ?? null,
     checkOutNextDay: !!outL && outL.date > r.workDate, checkInAt: r.checkInAt, checkOutAt: r.checkOutAt,
-    checkInSource: r.checkInSource, version: r.version, method: r.method,
+    checkInSource: r.checkInSource, shift: r.shift, version: r.version, method: r.method,
   };
 }
 
@@ -82,13 +89,14 @@ function withoutIds(p: ResolvedPolicy): PolicyValues {
 
 function closedReason(date: string, today: string, closesAt: Date, timezone: string) {
   if (date < today) return "Past dates can only be corrected by NF head office.";
-  return `Today's attendance closed for site operators at ${formatTime12(instantToLocal(closesAt.toISOString(), timezone).time)}. Please contact NF head office for corrections.`;
+  return `Today's attendance closed for plant attendance operators at ${formatTime12(instantToLocal(closesAt.toISOString(), timezone).time)}. Please contact NF head office for corrections.`;
 }
 
 export async function loadRegister(
   ctx: ServiceContext,
-  query: { projectId?: string | null; contractorId?: string | null; date?: string | null },
+  query: { projectId?: string | null; contractorId?: string | null; date?: string | null; shift?: string | null },
 ): Promise<RegisterView> {
+  const shift: Shift = query.shift === "night" ? "night" : "day";
   const projects = await accessibleProjects(ctx);
   const visible = ctx.actor.role === "admin" ? projects : projects.filter((p) => p.isActive);
   const project = visible.find((p) => p.id === query.projectId) ?? visible.find((p) => p.isActive) ?? visible[0] ?? null;
@@ -97,9 +105,9 @@ export async function loadRegister(
   if (!project) {
     const today = todayIn(FALLBACK_TIMEZONE, ctx.now);
     return {
-      projects: projectList, project: null, policy: null, contractors: [], contractorId: null, date: today, today,
+      projects: projectList, project: null, policy: null, contractors: [], contractorId: null, date: today, shift, today,
       nowTime: nowTimeIn(FALLBACK_TIMEZONE, ctx.now), editable: false,
-      readOnlyReason: "No project sites are assigned to you yet. Please contact NF head office.", rows: [],
+      readOnlyReason: "No plants are assigned to you yet. Please contact NF head office.", rows: [], otherShift: [],
     };
   }
 
@@ -138,10 +146,16 @@ export async function loadRegister(
     ? registerEntries({ projectId: project.id, contractorId, date, workers, assignments, records })
     : [];
 
-  const rows: RegisterRowDTO[] = entries.map((e) => ({
-    workerId: e.worker.id, workerCode: e.worker.code, workerName: e.worker.fullName, contractorId: e.contractorId,
-    assigned: e.assigned, saved: e.record ? toSavedDTO(e.record, project.timezone) : null,
-  }));
+  // One record per worker and day: a worker recorded on the other shift is not on this register.
+  const rows: RegisterRowDTO[] = entries
+    .filter((e) => !e.record || e.record.shift === shift)
+    .map((e) => ({
+      workerId: e.worker.id, workerCode: e.worker.code, employeeCode: e.worker.employeeCode, workerName: e.worker.fullName, contractorId: e.contractorId,
+      assigned: e.assigned, saved: e.record ? toSavedDTO(e.record, project.timezone) : null,
+    }));
+  const otherShift = entries
+    .filter((e) => e.record && e.record.shift !== shift)
+    .map((e) => ({ workerId: e.worker.id, workerName: e.worker.fullName, employeeCode: e.worker.employeeCode, workerCode: e.worker.code, status: e.record!.status }));
 
   let editable = true;
   let readOnlyReason: string | null = null;
@@ -150,10 +164,10 @@ export async function loadRegister(
     readOnlyReason = closedReason(date, today, closesAt, project.timezone);
   } else if (!project.isActive) {
     editable = ctx.actor.role === "admin";
-    readOnlyReason = editable ? null : "This project site is inactive.";
+    readOnlyReason = editable ? null : "This plant is inactive.";
   }
 
-  const day = withoutIds(policies.day);
+  const day = policyForShift(withoutIds(policies.day), shift);
   return {
     projects: projectList,
     project: { id: project.id, name: project.name, location: project.location, timezone: project.timezone },
@@ -172,11 +186,13 @@ export async function loadRegister(
     contractors: contractorList,
     contractorId,
     date,
+    shift,
     today,
     nowTime: nowTimeIn(project.timezone, ctx.now),
     editable,
     readOnlyReason,
     rows,
+    otherShift,
   };
 }
 
@@ -193,7 +209,7 @@ export async function saveAttendance(ctx: ServiceContext, raw: unknown): Promise
   const input = attendanceBatch.parse(raw);
   const project = await assertProjectAccess(ctx, input.projectId);
   const isAdmin = ctx.actor.role === "admin";
-  if (!project.isActive && !isAdmin) throw forbidden("This project site is inactive");
+  if (!project.isActive && !isAdmin) throw forbidden("This plant is inactive");
 
   const policies = await sitePolicies(ctx, project, input.workDate);
   if (input.workDate > policies.today) throw invalid("Attendance cannot be recorded for a future date");
@@ -201,7 +217,7 @@ export async function saveAttendance(ctx: ServiceContext, raw: unknown): Promise
     throw forbidden(closedReason(input.workDate, policies.today, operatorEditClosesAt(policies.capture, input.workDate, project.timezone), project.timezone).replace(/\.$/, ""));
   }
   if (input.policyToken && input.policyToken !== policies.token) {
-    throw staleSettings("Attendance settings for this site changed while you were editing. Reload to see them; your unsaved changes stay on this device.");
+    throw staleSettings("Attendance settings for this plant changed while you were editing. Reload to see them; your unsaved changes stay on this device.");
   }
 
   const [workers, assignments, records] = await Promise.all([
@@ -213,25 +229,28 @@ export async function saveAttendance(ctx: ServiceContext, raw: unknown): Promise
     projectId: project.id, contractorId: input.contractorId, date: input.workDate, workers, assignments, records,
   });
   const byWorker = new Map(entries.map((e) => [e.worker.id, e]));
-  const entryCtx = { workDate: input.workDate, timezone: project.timezone, dayPolicy: policies.day, capturePolicy: policies.capture, now: ctx.now };
+  const entryCtx = { workDate: input.workDate, timezone: project.timezone, dayPolicy: policyForShift(policies.day, input.shift), capturePolicy: policies.capture, now: ctx.now };
 
   const writes: AttendanceWrite[] = [];
   for (const item of input.items) {
     const entry = byWorker.get(item.workerId);
-    if (!entry) throw forbidden("A worker in this save is not on this site's register for that date");
+    if (!entry) throw forbidden("A worker in this save is not on this plant's register for that date");
     const name = entry.worker.fullName;
     const rec = entry.record;
     if ((rec?.version ?? null) !== item.expectedVersion) {
       throw conflict(`${name}'s attendance was changed by someone else. Reload to see the latest entries.`);
     }
     if (item.status === "pending" && !rec) continue; // nothing recorded, nothing to reset
+    if (rec && rec.shift !== input.shift) {
+      throw invalid(`${name} is recorded on the ${rec.shift} shift for this date. Open the ${rec.shift} shift to change it.`);
+    }
 
     const verdict = evaluateEntry(entryCtx, item, rec);
     if (!verdict.ok) throw invalid(`${name}: ${verdict.error}`);
     if (rec && rec.status === item.status && rec.checkInAt === verdict.checkInAt && rec.checkOutAt === verdict.checkOutAt) continue;
     writes.push({
       workerId: item.workerId, contractorId: entry.contractorId, status: item.status, checkInAt: verdict.checkInAt,
-      checkOutAt: verdict.checkOutAt, checkInSource: verdict.checkInSource, method: item.method, expectedVersion: item.expectedVersion,
+      checkOutAt: verdict.checkOutAt, checkInSource: verdict.checkInSource, shift: input.shift, method: item.method, expectedVersion: item.expectedVersion,
     });
   }
 

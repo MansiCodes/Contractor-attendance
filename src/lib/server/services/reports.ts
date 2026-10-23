@@ -1,5 +1,6 @@
 import { invalid } from "@/lib/errors";
 import { assignmentCovers } from "@/lib/domain/register";
+import { buildPayroll } from "@/lib/domain/payroll";
 import { buildReport, payableLabel, type Report } from "@/lib/domain/report";
 import { reportFilter } from "@/lib/domain/schemas";
 import { addDays, monthRange, todayIn } from "@/lib/domain/time";
@@ -15,7 +16,7 @@ export async function getReport(ctx: ServiceContext, raw: unknown): Promise<Repo
   if (f.from > f.to) throw invalid("'From' date must be before 'To' date");
   if (addDays(f.from, MAX_RANGE_DAYS) < f.to) throw invalid("Please choose a range of one year or less");
 
-  const [projects, contractors, workers, assignments, records, rules, policies] = await Promise.all([
+  const [projects, contractors, workers, assignments, records, rules, policies, payTerms] = await Promise.all([
     ctx.store.listProjects(),
     ctx.store.listContractors(),
     ctx.store.listWorkers(),
@@ -28,6 +29,7 @@ export async function getReport(ctx: ServiceContext, raw: unknown): Promise<Repo
     }),
     ctx.store.listPaymentRules(),
     ctx.store.listAttendancePolicies(),
+    ctx.store.listWorkerPayTerms(),
   ]);
   return buildReport({
     from: f.from,
@@ -40,6 +42,7 @@ export async function getReport(ctx: ServiceContext, raw: unknown): Promise<Repo
     assignments,
     records,
     rules,
+    payTerms,
     todayByProject: Object.fromEntries(projects.map((p) => [p.id, todayIn(p.timezone, ctx.now)])),
     policies,
     now: ctx.now,
@@ -70,7 +73,7 @@ export interface OverviewData {
   contractorRows: {
     contractorId: string;
     name: string;
-    location: string;
+    location: string | null;
     sites: number;
     workers: number;
     presentToday: number;
@@ -83,7 +86,7 @@ export async function getOverview(ctx: ServiceContext, monthOf?: string | null):
   assertAdmin(ctx);
   const today = await headOfficeToday(ctx);
   const month = monthRange(monthOf && monthOf <= today ? monthOf : today);
-  const [projects, contractors, workers, assignments, cpas, records, rules] = await Promise.all([
+  const [projects, contractors, workers, assignments, cpas, records, rules, payTerms] = await Promise.all([
     ctx.store.listProjects(),
     ctx.store.listContractors(),
     ctx.store.listWorkers(),
@@ -91,10 +94,11 @@ export async function getOverview(ctx: ServiceContext, monthOf?: string | null):
     ctx.store.listContractorProjects(),
     ctx.store.listAttendance({ from: month.from < addDays(today, -1) ? month.from : addDays(today, -1), to: today > month.to ? today : month.to }),
     ctx.store.listPaymentRules(),
+    ctx.store.listWorkerPayTerms(),
   ]);
   const activeProjects = projects.filter((p) => p.isActive);
   const todayByProject = Object.fromEntries(projects.map((p) => [p.id, todayIn(p.timezone, ctx.now)]));
-  const base = { projects: activeProjects, contractors, workers, assignments, records, rules, todayByProject };
+  const base = { projects: activeProjects, contractors, workers, assignments, records, rules, payTerms, todayByProject };
 
   // "Today" uses each site's own local date.
   const todayReport = buildReport({ ...base, from: addDays(today, -1), to: addDays(today, 1) });
@@ -141,7 +145,7 @@ export async function getOverview(ctx: ServiceContext, monthOf?: string | null):
       );
       const workerCount = workers.filter((w) => w.contractorId === c.id && activeWorkerIds.has(w.id)).length;
       const group = monthReport.byContractor.find((g) => g.contractorId === c.id);
-      const totals = group?.totals ?? { amount: 0, pricedDays: 0, unconfiguredDays: 0, presentDays: 0 };
+      const totals = group?.totals ?? { amount: 0, pricedDays: 0, unconfiguredDays: 0, needsConfigDays: 0, presentDays: 0 };
       return {
         contractorId: c.id,
         name: c.name,
@@ -202,7 +206,20 @@ export async function getAuditLog(
     ...l,
     workerName: w.get(l.workerId)?.fullName ?? "Unknown worker",
     workerCode: w.get(l.workerId)?.code ?? "",
-    projectName: p.get(l.projectId)?.name ?? "Unknown project",
+    projectName: p.get(l.projectId)?.name ?? "Unknown plant",
     changedByName: l.changedBy ? u.get(l.changedBy)?.fullName ?? "Unknown user" : "System",
   }));
+}
+
+/**
+ * Contractor-wise payroll estimate for one month (or one contractor in it). Admin only.
+ * Uses the same report rows as every other screen, so the figures reconcile.
+ */
+export async function getPayroll(ctx: ServiceContext, q: { month?: string | null; contractorId?: string | null }) {
+  assertAdmin(ctx);
+  const today = await headOfficeToday(ctx);
+  const month = monthRange(q.month && /^\d{4}-\d{2}$/.test(q.month) ? `${q.month}-01` : today);
+  const report = await getReport(ctx, { from: month.from, to: month.to, contractorId: q.contractorId ?? null });
+  const [rules, payTerms] = await Promise.all([ctx.store.listPaymentRules(), ctx.store.listWorkerPayTerms()]);
+  return buildPayroll(report, rules, payTerms);
 }

@@ -1,4 +1,4 @@
-import { calculateDay, round2, ruleForDate, type DayCalculation } from "./calc";
+import { calculateDay, round2, ruleForDate, termsForDate, type DayCalculation } from "./calc";
 import { dayLabels, NO_LABELS, operatorEditClosesAt, resolvePolicy, type AttendancePolicyVersion, type DayLabels, type EffectivePolicy } from "./policy";
 import { assignmentCovers } from "./register";
 import { addDays, instantToLocal } from "./time";
@@ -9,8 +9,10 @@ import type {
   Contractor,
   PaymentRule,
   Project,
+  Shift,
   Worker,
   WorkerAssignment,
+  WorkerPayTerms,
 } from "./types";
 
 // One report builder feeds the on-screen report, the overview and the Excel
@@ -20,12 +22,16 @@ export interface ReportRow {
   key: string;
   workerId: string;
   workerCode: string;
+  /** the contractor's own employee ID */
+  employeeCode: string | null;
   workerName: string;
   contractorId: string;
   contractorName: string;
   projectId: string;
   projectName: string;
   workDate: string;
+  /** shift of the record (day when nothing is recorded) */
+  shift: Shift;
   status: AttendanceStatus;
   checkIn: string | null;
   checkOut: string | null;
@@ -56,6 +62,8 @@ export interface ReportTotals {
   pricedDays: number;
   /** rows that would be payable but have no rule */
   unconfiguredDays: number;
+  /** rows whose rule is missing a setting the calculation needs ("Needs configuration") */
+  needsConfigDays: number;
 }
 
 export interface ReportGroup {
@@ -64,9 +72,22 @@ export interface ReportGroup {
   contractorName: string;
   projectId: string | null;
   projectName: string | null;
+  /** plants (stored as projects) this group covers */
   sites: number;
   /** contractor has at least one payment rule version */
   ruleConfigured: boolean;
+  totals: ReportTotals;
+}
+
+/** Plant-wise totals across every contractor working at that plant. */
+export interface PlantGroup {
+  key: string;
+  projectId: string;
+  projectName: string;
+  /** contractors with worker-days at this plant in the period */
+  contractors: number;
+  /** how many of those contractors have a payment rule version (0 = payable "Not configured") */
+  contractorsWithRules: number;
   totals: ReportTotals;
 }
 
@@ -76,6 +97,7 @@ export interface Report {
   rows: ReportRow[];
   byContractor: ReportGroup[];
   byContractorProject: ReportGroup[];
+  byProject: PlantGroup[];
   totals: ReportTotals;
 }
 
@@ -90,6 +112,8 @@ export interface ReportInput {
   assignments: WorkerAssignment[];
   records: AttendanceRecord[];
   rules: PaymentRule[];
+  /** Workers' own rates and commission eligibility (for rules that use them). Admin data. */
+  payTerms?: WorkerPayTerms[];
   /** Today's date per project timezone. Pending is only counted up to today. */
   todayByProject: Record<string, string>;
   /** Attendance policy versions; when given (with `now`), rows carry labels. */
@@ -111,6 +135,7 @@ function emptyTotals(): ReportTotals {
     amount: 0,
     pricedDays: 0,
     unconfiguredDays: 0,
+    needsConfigDays: 0,
   };
 }
 
@@ -131,6 +156,7 @@ function accumulate(totals: ReportTotals, row: ReportRow) {
     totals.pricedDays++;
   }
   if (c.amountState === "not_configured") totals.unconfiguredDays++;
+  if (c.amountState === "needs_configuration") totals.needsConfigDays++;
 }
 
 function finish(totals: ReportTotals, workerIds: Set<string>): ReportTotals {
@@ -183,19 +209,21 @@ export function buildReport(input: ReportInput): Report {
     if (!worker || !project) return null;
     const tz = project.timezone;
     const rule = ruleForDate(input.rules, contractorId, workDate);
-    const calc = calculateDay(record, rule);
+    const calc = calculateDay(record, rule, rule?.rateSource === "worker" ? termsForDate(input.payTerms ?? [], workerId, workDate) : null);
     const inLocal = record?.checkInAt ? instantToLocal(record.checkInAt, tz) : null;
     const outLocal = record?.checkOutAt ? instantToLocal(record.checkOutAt, tz) : null;
     return {
       key: `${workerId}:${projectId}:${workDate}`,
       workerId,
       workerCode: worker.code,
+      employeeCode: worker.employeeCode,
       workerName: worker.fullName,
       contractorId,
       contractorName: contractorById.get(contractorId)?.name ?? "Unknown contractor",
       projectId,
       projectName: project.name,
       workDate,
+      shift: record?.shift ?? "day",
       status: calc.status,
       checkIn: record?.status === "present" ? inLocal?.time ?? null : null,
       checkOut: record?.status === "present" ? outLocal?.time ?? null : null,
@@ -246,12 +274,21 @@ export function buildReport(input: ReportInput): Report {
     contractor: new Map<string, { totals: ReportTotals; workers: Set<string>; sites: Set<string>; row: ReportRow }>(),
     contractorProject: new Map<string, { totals: ReportTotals; workers: Set<string>; sites: Set<string>; row: ReportRow }>(),
   };
+  const plantMap = new Map<string, { totals: ReportTotals; workers: Set<string>; contractors: Set<string>; row: ReportRow }>();
   const grand = emptyTotals();
   const grandWorkers = new Set<string>();
 
   for (const row of rows) {
     accumulate(grand, row);
     grandWorkers.add(row.workerId);
+    let plant = plantMap.get(row.projectId);
+    if (!plant) {
+      plant = { totals: emptyTotals(), workers: new Set(), contractors: new Set(), row };
+      plantMap.set(row.projectId, plant);
+    }
+    accumulate(plant.totals, row);
+    plant.workers.add(row.workerId);
+    plant.contractors.add(row.contractorId);
     for (const [kind, key] of [
       ["contractor", row.contractorId],
       ["contractorProject", `${row.contractorId}:${row.projectId}`],
@@ -292,6 +329,16 @@ export function buildReport(input: ReportInput): Report {
     rows,
     byContractor: toGroups("contractor"),
     byContractorProject: toGroups("contractorProject"),
+    byProject: [...plantMap.entries()]
+      .map(([key, g]) => ({
+        key,
+        projectId: g.row.projectId,
+        projectName: g.row.projectName,
+        contractors: g.contractors.size,
+        contractorsWithRules: [...g.contractors].filter((c) => ruleContractors.has(c)).length,
+        totals: finish(g.totals, g.workers),
+      }))
+      .sort((a, b) => a.projectName.localeCompare(b.projectName)),
     totals: finish(grand, grandWorkers),
   };
 }
@@ -300,10 +347,13 @@ export function formatINR(amount: number): string {
   return `₹${amount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-/** Human display of an estimated payable, never inventing a figure when no rule exists. */
-export function payableLabel(t: Pick<ReportTotals, "amount" | "pricedDays" | "unconfiguredDays">, ruleConfigured: boolean): string {
+/** Human display of an estimated payable, never inventing a figure when a rule or a setting is missing. */
+export function payableLabel(t: Pick<ReportTotals, "amount" | "pricedDays" | "unconfiguredDays" | "needsConfigDays">, ruleConfigured: boolean): string {
   if (!ruleConfigured) return "Not configured";
-  if (t.pricedDays === 0 && t.unconfiguredDays > 0) return "Not configured";
-  const base = formatINR(t.amount);
-  return t.unconfiguredDays > 0 ? `${base} + ${t.unconfiguredDays} day(s) not configured` : base;
+  if (t.pricedDays === 0 && t.unconfiguredDays > 0 && t.needsConfigDays === 0) return "Not configured";
+  if (t.pricedDays === 0 && t.needsConfigDays > 0) return "Needs configuration";
+  const parts = [formatINR(t.amount)];
+  if (t.unconfiguredDays > 0) parts.push(`${t.unconfiguredDays} day(s) not configured`);
+  if (t.needsConfigDays > 0) parts.push(`${t.needsConfigDays} day(s) need configuration`);
+  return parts.join(" + ");
 }

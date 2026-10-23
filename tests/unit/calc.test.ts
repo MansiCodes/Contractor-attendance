@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { calculateDay, ruleForDate } from "@/lib/domain/calc";
+import { calculateDay, legacyRuleSettings, ruleForDate } from "@/lib/domain/calc";
 import { localToInstant, resolveShift } from "@/lib/domain/time";
 import type { AttendanceSnapshot, PaymentRule } from "@/lib/domain/types";
 
@@ -11,7 +11,9 @@ const present = (inT: string, outT: string | null, date = "2026-10-15", outDate 
   checkOutAt: outT ? at(outDate, outT) : null,
 });
 
-const rule = (r: Partial<PaymentRule>): PaymentRule => ({
+// The original rule shape; the v2 settings are the ones that reproduce its behaviour.
+const rule = (r: Partial<PaymentRule>): PaymentRule => {
+  const base = {
   id: "r",
   contractorId: "c1",
   version: 1,
@@ -29,7 +31,9 @@ const rule = (r: Partial<PaymentRule>): PaymentRule => ({
   createdAt: "2026-01-01T00:00:00Z",
   createdBy: null,
   ...r,
-});
+  };
+  return { ...base, ...legacyRuleSettings(base as PaymentRule), ...r } as PaymentRule;
+};
 
 describe("calculateDay", () => {
   it("pending (suggested 9 AM, unconfirmed) is never counted or payable", () => {

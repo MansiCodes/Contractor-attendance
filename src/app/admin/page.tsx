@@ -54,7 +54,7 @@ export default async function OverviewPage({ searchParams }: { searchParams: Sea
           <Stat label="Present" value={cards.presentToday} tone="present" data-testid="tile-present" />
           <Stat label="Pending" value={cards.pendingToday} tone="pending" data-testid="tile-pending" hint={cards.outMissingToday > 0 ? `${cards.outMissingToday} without OUT` : undefined} />
           <Stat label="Absent" value={cards.absentToday} tone="absent" data-testid="tile-absent" />
-          <Stat label="Projects" value={cards.activeSites} href="/admin/projects" data-testid="tile-sites" />
+          <Stat label="Plants" value={cards.activeSites} href="/admin/plants" data-testid="tile-sites" />
           <Stat label="Contractors" value={cards.contractors} href="/admin/contractors" data-testid="tile-contractors" />
           <Stat label="Workers" value={cards.activeWorkers} href="/admin/workers" data-testid="tile-workers" />
         </div>
@@ -62,13 +62,13 @@ export default async function OverviewPage({ searchParams }: { searchParams: Sea
 
       <Section
         id="attention"
-        title="Sites with incomplete attendance today"
-        description={data.attention.length > 0 ? "Tap a site to open its register." : undefined}
+        title="Plants with incomplete attendance today"
+        description={data.attention.length > 0 ? "Tap a plant to open its register." : undefined}
       >
         {data.attention.length === 0 ? (
           <div className="flex items-center gap-3 rounded-xl bg-card px-4 py-4 shadow-surface">
             <CheckCircle2 className="size-5 text-present" />
-            <p className="text-sm">All sites are complete for today.</p>
+            <p className="text-sm">All plants are complete for today.</p>
           </div>
         ) : (
           <Group as="ul">
@@ -130,7 +130,7 @@ export default async function OverviewPage({ searchParams }: { searchParams: Sea
             <thead>
               <tr className="border-b text-left text-2xs font-semibold tracking-wide text-muted-foreground uppercase">
                 <th className="px-4 py-2.5 font-semibold">Contractor</th>
-                <th className="px-4 py-2.5 text-right font-semibold">Sites</th>
+                <th className="px-4 py-2.5 text-right font-semibold">Plants</th>
                 <th className="px-4 py-2.5 text-right font-semibold">Workers</th>
                 <th className="px-4 py-2.5 text-right font-semibold">Present today</th>
                 <th className="px-4 py-2.5 text-right font-semibold">Worker-days</th>
@@ -174,7 +174,7 @@ export default async function OverviewPage({ searchParams }: { searchParams: Sea
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-md font-semibold">{c.name}</div>
                   <div className="tabular mt-0.5 text-xs text-muted-foreground">
-                    {c.workers} workers · {c.sites} {c.sites === 1 ? "site" : "sites"} · {c.presentToday} present today
+                    {c.workers} workers · {c.sites} {c.sites === 1 ? "plant" : "plants"} · {c.presentToday} present today
                   </div>
                   <div className="tabular mt-2 flex items-baseline justify-between gap-2 text-sm">
                     <span className="text-muted-foreground">{c.monthWorkerDays} worker-days</span>

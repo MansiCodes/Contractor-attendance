@@ -179,7 +179,7 @@ export async function createPolicyVersion(ctx: ServiceContext, raw: unknown): Pr
   let today: string;
   if (fields.projectId) {
     const project = projects.find((p) => p.id === fields.projectId);
-    if (!project) throw notFound("Project");
+    if (!project) throw notFound("Plant");
     today = todayIn(project.timezone, ctx.now);
   } else {
     today = companyToday(ctx, projects, versions);

@@ -15,7 +15,7 @@ const notoDevanagari = Noto_Sans_Devanagari({
 
 export const metadata: Metadata = {
   title: { default: "NF Attendance Register", template: "%s · NF Attendance" },
-  description: "Contractor labour attendance register for NF project sites",
+  description: "Plant labour attendance register for contractor workers in our manufacturing plants",
   applicationName: "NF Attendance",
   appleWebApp: { capable: true, title: "NF Attendance", statusBarStyle: "default" },
   formatDetection: { telephone: false },
