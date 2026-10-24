@@ -1,0 +1,73 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DeployThroughCdkBootstrapRoles",
+      "Effect": "Allow",
+      "Action": "sts:AssumeRole",
+      "Resource": "arn:aws:iam::ACCOUNT_ID:role/cdk-hnb659fds-*-ACCOUNT_ID-ap-south-1"
+    },
+    {
+      "Sid": "ReadStacks",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:DescribeStacks",
+        "cloudformation:DescribeStackEvents",
+        "cloudformation:DescribeStackResources",
+        "cloudformation:GetTemplate",
+        "cloudformation:ListStacks"
+      ],
+      "Resource": "*",
+      "Condition": { "StringEquals": { "aws:RequestedRegion": "ap-south-1" } }
+    },
+    {
+      "Sid": "UploadSourceForImageBuild",
+      "Effect": "Allow",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::nfattendance-data-buildsource*/source.zip"
+    },
+    {
+      "Sid": "BuildImage",
+      "Effect": "Allow",
+      "Action": ["codebuild:StartBuild", "codebuild:BatchGetBuilds"],
+      "Resource": "arn:aws:codebuild:ap-south-1:ACCOUNT_ID:project/nf-attendance-image"
+    },
+    {
+      "Sid": "RunAdminTask",
+      "Effect": "Allow",
+      "Action": "ecs:RunTask",
+      "Resource": "arn:aws:ecs:ap-south-1:ACCOUNT_ID:task-definition/nf-attendance-admin:*",
+      "Condition": { "ArnEquals": { "ecs:cluster": "arn:aws:ecs:ap-south-1:ACCOUNT_ID:cluster/nf-attendance" } }
+    },
+    {
+      "Sid": "PassOnlyTheAdminTaskRole",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::ACCOUNT_ID:role/NfAttendance-Admin-AdminTaskExecutionRole*",
+      "Condition": { "StringEquals": { "iam:PassedToService": "ecs-tasks.amazonaws.com" } }
+    },
+    {
+      "Sid": "WatchTasksAndService",
+      "Effect": "Allow",
+      "Action": ["ecs:DescribeTasks", "ecs:ListTasks", "ecs:DescribeServices", "ecs:DescribeClusters", "ecs:DescribeExpressGatewayService"],
+      "Resource": "*",
+      "Condition": { "StringEquals": { "aws:RequestedRegion": "ap-south-1" } }
+    },
+    {
+      "Sid": "ReadAppLogs",
+      "Effect": "Allow",
+      "Action": ["logs:DescribeLogGroups", "logs:DescribeLogStreams", "logs:GetLogEvents", "logs:FilterLogEvents", "logs:StartLiveTail", "logs:StopLiveTail"],
+      "Resource": [
+        "arn:aws:logs:ap-south-1:ACCOUNT_ID:log-group:/nf-attendance/*",
+        "arn:aws:logs:ap-south-1:ACCOUNT_ID:log-group:/nf-attendance/*:*"
+      ]
+    },
+    {
+      "Sid": "ListLogGroups",
+      "Effect": "Allow",
+      "Action": "logs:DescribeLogGroups",
+      "Resource": "*",
+      "Condition": { "StringEquals": { "aws:RequestedRegion": "ap-south-1" } }
+    }
+  ]
+}

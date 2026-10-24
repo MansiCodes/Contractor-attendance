@@ -40,15 +40,11 @@ provider webhook ──► delivery statuses (sent → delivered → read, or fa
 
 `GET` or `POST /api/whatsapp/dispatch` with `Authorization: Bearer <CRON_SECRET>`. Call it every 10–15 minutes. It queues the day's messages once after the configured send time (head-office timezone), and sends due retries on every call. Without `CRON_SECRET` it answers 503.
 
-Options (**not set up by this repository**; each needs your approval because it changes production settings):
-
-- Vercel Cron: add a `crons` entry to `vercel.json` for `/api/whatsapp/dispatch` and set `CRON_SECRET` in Vercel. Vercel sends the bearer header automatically.
-- Supabase `pg_cron` + `pg_net` calling the URL with the header.
-- Any external cron service.
+On AWS this is **EventBridge Scheduler → Lambda** (`infra/lambda/dispatch.cjs`, defined in the `NfAttendance-App` stack). The Lambda only calls this endpoint with the secret; the queue, consent checks, retries and status ledger stay in the app and the database. The schedule is created **DISABLED** and is switched on only as part of the go-live below (stack parameter `WhatsAppScheduleState=ENABLED`). Any other cron that sends the bearer header works too.
 
 ## Environment variables (server only, never `NEXT_PUBLIC_`)
 
-`.env.example` was not changed. Add these lines yourself when you go live:
+On AWS the keys and `CRON_SECRET` live in the Secrets Manager secret `nf-attendance/app` and `WHATSAPP_LIVE_SENDING` is a stack parameter (see [aws/deployment.md](aws/deployment.md) §9 and §12). For other setups, `.env.example` was not changed; the variables are:
 
 ```
 # WhatsApp (Meta Cloud API). Live sending also needs WHATSAPP_LIVE_SENDING=enabled.
@@ -62,15 +58,15 @@ WHATSAPP_API_VERSION=v21.0
 CRON_SECRET=
 ```
 
-Live sending happens only when the app is in live mode, `WHATSAPP_LIVE_SENDING=enabled`, and the token and phone number ID are set. The admin screen shows which values are present, never the values.
+Live sending happens only when the app is in production mode (`APP_MODE=production`), `WHATSAPP_LIVE_SENDING=enabled`, and the token and phone number ID are set. The admin screen shows which values are present, never the values.
 
 ## Going live: checklist
 
 1. Meta Business verification, a WhatsApp Business phone number, and a permanent (system user) access token.
 2. Create and get approval for two **utility** templates in WhatsApp Manager, with seven body parameters in this order: name, date, plant, shift, IN, OUT, total time. The text to submit is in `TEMPLATES` in `src/lib/domain/messaging.ts`. Enter the approved names under Settings → WhatsApp.
-3. Webhook: set the callback URL `https://<your-domain>/api/whatsapp/webhook`, with the verify token `WHATSAPP_VERIFY_TOKEN`, and subscribe to `messages`. Every POST is checked against `X-Hub-Signature-256` using `WHATSAPP_APP_SECRET`.
+3. Webhook: set the callback URL `https://<AppUrl>/api/whatsapp/webhook`, with the verify token `WHATSAPP_VERIFY_TOKEN`, and subscribe to `messages`. Every POST is checked against `X-Hub-Signature-256` using `WHATSAPP_APP_SECRET`.
 4. Collect consent (form or recorded verbal) and numbers through the contacts template. Numbers are never generated.
-5. Apply migration `20261023000005_whatsapp.sql`, set the variables, and schedule the dispatcher.
+5. Put the keys in the `nf-attendance/app` secret and redeploy the App stack with live sending and the schedule enabled ([aws/deployment.md](aws/deployment.md) §12). The WhatsApp tables come with the normal migrations.
 6. Send a test message to your own number, then turn messaging on with a start date of today.
 
-Not done or not verified: no message has been sent through Meta, and the webhook has not received a real Meta payload (the signature check and status parsing are unit-tested). The Supabase store's messaging methods are tested only through the SQL in PGlite, not through PostgREST.
+Not done or not verified: no message has been sent through Meta, and the webhook has not received a real Meta payload (the signature check and status parsing are unit-tested). The PostgreSQL store's messaging methods are tested against the real migrations in PGlite (`tests/db`), not yet against Amazon RDS.

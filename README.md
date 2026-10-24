@@ -9,7 +9,15 @@ Company → Manufacturing plant → Contractor → Workers → Daily attendance.
 
 Internally, plants are stored in the `projects` table (`project_id` columns, `Project` types). Only the names users see were changed, so nothing that already worked had to move.
 
-Stack: Next.js 16 (App Router, TypeScript), Tailwind CSS 4, shadcn/ui, Supabase (Postgres, Auth, Storage, RLS), React Hook Form + Zod, date-fns, Lucide, ExcelJS. Vitest, PGlite and Playwright are used for tests.
+Stack: Next.js 16 (App Router, TypeScript), Tailwind CSS 4, shadcn/ui, PostgreSQL with Row Level Security (node-postgres; Amazon RDS in production), app-managed sign-in, React Hook Form + Zod, date-fns, Lucide, ExcelJS. Hosting target: AWS (ECS Express Mode, RDS, S3), defined with AWS CDK in `infra/`. Vitest, PGlite and Playwright are used for tests.
+
+The app runs in one of three modes, chosen by `APP_MODE`:
+
+| Mode | Data | Used for |
+|---|---|---|
+| `demo` | fictional, in server memory | trying the app; never switches on by itself when a database is configured |
+| `development` | a local PostgreSQL (built-in PGlite server or Docker) | developing with a real database |
+| `production` | Amazon RDS PostgreSQL + private S3, TLS required | the live system on AWS |
 
 ---
 
@@ -33,7 +41,7 @@ The demo has 4 manufacturing plants (PVC, LED Rope Light, Upcast, Quad & Signall
 
 Demo data lives only in server memory. It never touches a database, and it resets when the server restarts or when you use **user menu → Reset demo data**.
 
-**On your phone:** run `npm run dev -- -H 0.0.0.0` and open `http://<your-PC-LAN-IP>:3000` on a phone connected to the same Wi-Fi. You can also deploy the demo to Vercel (section 4).
+**On your phone:** run `npm run dev -- -H 0.0.0.0` and open `http://<your-PC-LAN-IP>:3000` on a phone connected to the same Wi-Fi.
 
 ## 2. How attendance works
 
@@ -55,35 +63,30 @@ Demo data lives only in server memory. It never touches a database, and it reset
 
 **WhatsApp messages** (Settings → WhatsApp): a short Hindi message to each consenting worker after a confirmed day, never with wages. **Live sending is off**: messages go to a mock transport. See [docs/whatsapp.md](docs/whatsapp.md).
 
-## 3. Connect Supabase (live mode)
+## 3. Development mode (a real database on your PC)
 
-1. Create a Supabase project (choose the Mumbai region for India).
-2. Apply the migrations **in order** from `supabase/migrations/`, either through the SQL Editor (paste each file in turn) or with the Supabase CLI:
-   ```bash
-   npx supabase link --project-ref <your-ref>
-   npx supabase db push
-   ```
-   These create the tables, constraints, RLS policies, RPC functions, audit triggers and the private `contractor-photos` storage bucket.
-3. In **Authentication → Sign In / Providers**, turn **off** "Allow new users to sign up". Accounts are created by admins only.
-4. Copy `.env.example` to `.env.local` and fill in:
-   - `APP_MODE=live`
-   - `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` (from Project Settings → API)
-   - `SUPABASE_SERVICE_ROLE_KEY` (server-only; used just to create operator accounts)
-5. Create the first admin:
-   ```bash
-   npm run create-admin -- admin@yourcompany.in "Admin Name" "a-strong-temp-password"
-   ```
-6. Run `npm run dev` and sign in with that email and password. Then add plants, contractors (assign them to plants), workers, payment rules, attendance settings, and operators (Plants → Plant attendance operators). Grant each operator access to their plants.
+No installation needed: a local PostgreSQL 18 (PGlite) is served on 127.0.0.1 only, with its data in `.data/` (git-ignored).
 
-In live mode, the demo sign-in and demo data are switched off completely. If a database call fails, the error is shown and demo data is never used in its place.
+```bash
+npm run db:dev                          # terminal 1: the database (keep it open)
+npm run db:dev:migrate                  # terminal 2: apply all migrations
+npm run db:dev:admin -- you@example.com "Your Name"   # first admin (password typed at a hidden prompt)
+npm run dev:pg                          # the app in development mode, photos under .data/uploads
+```
 
-## 4. Deploy to Vercel
+Sign in with that email; later admins and all operators are created in the app with temporary passwords that must be changed at the first sign-in. There is no self-registration. A database closer to RDS: `docker-compose.yml` (PostgreSQL 18 on 127.0.0.1:54330, needs Docker or Podman).
 
-1. Push this folder to a Git repository and import it in Vercel (framework preset: Next.js; no build settings needed).
-2. Add the environment variables from step 3.4 for **Production** (and Preview, if you want a live preview). Leave them out entirely for a public demo deployment.
-3. Deploy. To install the app on a phone, open the URL in Chrome or Safari and choose "Add to Home screen".
+If the database is configured but unreachable, the app shows an error. It never falls back to demo data.
 
-Note: in demo mode on Vercel, the in-memory data may reset when the server instance is recycled. That is fine for demos. Use live mode for real data.
+## 4. Production on AWS
+
+Everything is prepared as code but **nothing has been created on AWS yet**; provisioning waits for approval.
+
+- [docs/aws/architecture-and-costs.md](docs/aws/architecture-and-costs.md): compatibility audit, architecture, options considered, security and backups, monthly cost (≈ $68 before GST).
+- [docs/aws/deployment.md](docs/aws/deployment.md): step-by-step deployment, migrations, first admin, releases, rollback, backups, WhatsApp go-live.
+- `infra/`: the CDK stacks (`NfAttendance-Data`, `NfAttendance-Admin`, `NfAttendance-App`) and their tests; `Dockerfile` for the image.
+
+To try the production build locally: `npm run build`, then `node scripts/start-standalone.mjs` (the same server the container runs).
 
 ## 5. Tests
 
@@ -91,8 +94,12 @@ Note: in demo mode on Vercel, the in-memory data may reset when the server insta
 npm run check        # type-check + lint + all Vitest suites
 npm run test:unit    # calculations, services/permissions, Excel reconciliation, demo/live isolation
 npm run test:db      # runs the real SQL migrations in PGlite (Postgres 18) and tests RLS, RPCs, triggers
-npm run test:e2e     # builds the app and runs Playwright: phone-sized operator flow + admin flow
+npm run test:e2e     # builds the app and runs Playwright against the standalone server: phone-sized operator flow + admin flow
+npm run infra:test   # security and cost checks on the synthesised AWS CloudFormation (no AWS access)
+npm run infra:synth  # writes the CloudFormation templates to infra/cdk.out
 ```
+
+The infra commands need `npm ci` inside `infra/` once.
 
 The first `test:e2e` run needs a Playwright browser: `npx playwright install chromium`. Set `PW_CHANNEL=msedge` to use an installed Edge instead.
 
@@ -106,20 +113,27 @@ src/lib/domain/             pure logic: time maths, payment rules engine, regist
 src/lib/import/             reads uploaded .xlsx files into plain grids
 src/lib/server/messaging/   WhatsApp transports (mock / Cloud API), webhook checks, dispatcher
 src/lib/server/services/    authorization + business rules (used by both data stores)
-src/lib/server/store/       DataStore interface, demo store, Supabase store
-supabase/migrations/        schema, RLS, functions, storage
+src/lib/server/store/       DataStore interface, demo store, PostgreSQL store
+src/lib/server/auth/        sign-in, sessions, passwords
+src/lib/server/db/          connection pool; every query runs as the signed-in user under RLS
+src/lib/server/storage/     private photo storage (S3, or a local folder in development)
+db/platform/bootstrap.sql   roles and auth objects the migrations rely on (plain PostgreSQL)
+supabase/migrations/        schema, RLS, functions (folder name kept from V1)
+scripts/                    migrations, first admin, password hash, local database, standalone server
+infra/                      AWS CDK stacks, tests, scheduled-dispatch Lambda
 tests/                      unit, db (PGlite) and e2e (Playwright)
 ```
 
 ## 7. Not yet verified, or needing your input
 
-- **Not yet tested against a real Supabase project**: live sign-in, the Supabase data store, photo upload and creating operator accounts. The SQL itself (schema, RLS, functions, triggers) is tested in PGlite, but PGlite is not PostgREST or GoTrue.
+- **Not yet tested on AWS**: no AWS resource exists yet. Sign-in, the PostgreSQL store, migrations and the admin scripts are tested against PostgreSQL 18 (PGlite) locally, including the production build in development mode; TLS to RDS, S3 signed links, the image build and the scheduler are not.
 - **Payment rates and thresholds**: none are assumed. Configure each contractor's real terms under Contractors → Payment rules.
 - **Operator role**: the operator's job designation is still open. The app makes no assumption about whether the operator works for the contractor or for the company.
 - **Timezone**: new plants start with the company default from Settings (`Asia/Kolkata` initially). Each plant keeps its own timezone, which locks once attendance has been recorded there.
-- **Migrations since the baseline** (`20261022000001`, `20261022000002`, `20261023000001_manufacturing_plants`, `20261023000002_worker_master`, `20261023000003_payment_rules_v2`, `20261023000004_shifts`, `20261023000005_whatsapp`) are tested only in PGlite so far. They have not been applied to any Supabase project.
+- **Migrations**: none has been applied to a real database yet (all are tested in PGlite). On AWS they run through `scripts/db/migrate.mjs` (see the deployment guide).
+- **Old Supabase code**: `src/lib/server/store/supabase-store.ts`, `src/lib/supabase/server.ts` and the `@supabase/*` packages are unused; deleting them awaits approval. `.env.example` still shows the Supabase variables; the current ones are in [docs/aws/deployment.md](docs/aws/deployment.md) §9.
 - **Undecided pay settings**: overtime pay (rate or multiplier), rounding, commission base and treatment, Shukla's rate basis and days per month, short-day handling, and which Sumit workers get commission. See [docs/contractor-master-and-pay.md](docs/contractor-master-and-pay.md).
 - **Contractor identity**: confirm whether the "Excellent" sheet is GAJENDRA RANA CONTRACTORS.
-- **WhatsApp**: not connected to Meta; live sending is off. See [docs/whatsapp.md](docs/whatsapp.md) for the go-live checklist and the variables to add to `.env.example`.
+- **WhatsApp**: not connected to Meta; live sending is off and the AWS schedule is created disabled. See [docs/whatsapp.md](docs/whatsapp.md) and [docs/aws/deployment.md](docs/aws/deployment.md) §12.
 - **Historical registers (PDF)**: the handwritten September register was not transcribed. Entering it needs a person to type it, or a reviewed CSV/XLSX import (not built yet).
 - **Branding**: the app is still named "NF Attendance Register". Tell us if it should carry another name now that it covers Atlanta Tele Cables, Valuecon and Notofire plants.
