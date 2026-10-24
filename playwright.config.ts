@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { defineConfig, devices } from "@playwright/test";
 
 const PORT = Number(process.env.E2E_PORT ?? 3100);
@@ -30,11 +31,19 @@ export default defineConfig({
     { name: "desktop", use: { ...devices["Desktop Chrome"] }, testMatch: /admin\.spec\.ts/ },
   ],
   webServer: {
-    command: `npm run build && npx next start -p ${PORT}`,
+    // The standalone server the container image runs (scripts/start-standalone.mjs).
+    command: "npm run build && node scripts/start-standalone.mjs",
     url: `http://localhost:${PORT}/login`,
     timeout: 300_000,
     reuseExistingServer: !!process.env.E2E_REUSE,
     // With E2E_REUSE, start that server with the same NODE_OPTIONS and E2E_CLOCK_OFFSET_MS (or set the offset to 0).
-    env: { APP_MODE: "demo", NEXT_TELEMETRY_DISABLED: "1", NODE_OPTIONS: "--require ./tests/e2e/fake-clock.cjs" },
+    // The server runs from .next/standalone, so the clock preload is given as an absolute path.
+    env: {
+      APP_MODE: "demo",
+      NEXT_TELEMETRY_DISABLED: "1",
+      PORT: String(PORT),
+      HOSTNAME: "localhost",
+      NODE_OPTIONS: `--require "${resolve("tests/e2e/fake-clock.cjs").replace(/\\/g, "/")}"`,
+    },
   },
 });
