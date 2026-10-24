@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import { App } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
@@ -171,6 +173,20 @@ describe("web app", () => {
     assert.equal(resourcesOf(admin, "AWS::ECS::TaskDefinition").length, 1);
     admin.resourceCountIs("AWS::ECS::Cluster", 1);
     web.resourceCountIs("AWS::ECS::Cluster", 0);
+  });
+
+  it("gives the admin task exactly two roles, both passable by the deployer, the task role without permissions", () => {
+    const roles = resourcesOf(admin, "AWS::IAM::Role").map(([id]) => id);
+    assert.equal(roles.length, 2);
+    // Generated role names begin with "<stack>-<logical id>", matched by docs/aws/iam-deployer-policy.json.
+    for (const id of roles) assert.match(id, /^AdminTask/);
+    const [[, task]] = resourcesOf(admin, "AWS::ECS::TaskDefinition");
+    assert.match(json(task.Properties?.TaskRoleArn), /AdminTaskRole[0-9A-F]/);
+    assert.match(json(task.Properties?.ExecutionRoleArn), /AdminTaskExecutionRole/);
+    const taskRolePolicies = resourcesOf(admin, "AWS::IAM::Policy").filter(([id]) => /^AdminTaskRole[0-9A-F]/.test(id));
+    assert.equal(taskRolePolicies.length, 0);
+    const policyDoc = readFileSync(join(__dirname, "..", "..", "docs", "aws", "iam-deployer-policy.json"), "utf8");
+    assert.ok(policyDoc.includes("role/NfAttendance-Admin-AdminTask*"), "deployer policy must allow passing both admin task roles");
   });
 
   it("gives the admin task the owner login only through secrets, and only shows the plan by default", () => {

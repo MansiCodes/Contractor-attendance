@@ -88,6 +88,29 @@ describe("PostgreSQL store with app sign-in (production data layer)", () => {
     await raw.query("update auth.users set locked_until = null where email = 'admin@nf.test'");
   });
 
+  it("a password reset while the old password is being checked leaves no session for the old password", async () => {
+    const liveSessions = async () => (await raw.query<{ n: number }>("select count(*)::int as n from auth.sessions where revoked_at is null")).rows[0].n;
+    const before = await liveSessions();
+    const replaced = await hashPassword("Reset-meanwhile-2026");
+    let transactions = 0;
+    // The interleaving: right after the stored hash is read (first transaction) and
+    // while the server is still checking the password, an admin resets it.
+    const racing: Database = {
+      transaction: async (fn) => {
+        const result = await db.transaction(fn);
+        if (++transactions === 1) {
+          await raw.query("update auth.users set password_hash = $1, password_changed_at = now() where email = 'admin@nf.test'", [replaced]);
+        }
+        return result;
+      },
+    };
+    expect(await signIn(racing, "admin@nf.test", ADMIN_PASSWORD)).toEqual({ ok: false, error: "Email or password is incorrect" });
+    expect(await liveSessions()).toBe(before);
+    // Put the original password back for the tests that follow.
+    await raw.query("update auth.users set password_hash = $1 where email = 'admin@nf.test'", [await hashPassword(ADMIN_PASSWORD)]);
+    expect(await signIn(db, "admin@nf.test", ADMIN_PASSWORD)).toMatchObject({ ok: true });
+  });
+
   it("request roles cannot read password hashes or sessions; the system account cannot sign in", async () => {
     await raw.exec(`select set_config('request.jwt.claim.sub', '${adminActor.id}', false); set role authenticated;`);
     try {

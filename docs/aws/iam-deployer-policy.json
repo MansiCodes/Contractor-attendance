@@ -40,10 +40,10 @@
       "Condition": { "ArnEquals": { "ecs:cluster": "arn:aws:ecs:ap-south-1:ACCOUNT_ID:cluster/nf-attendance" } }
     },
     {
-      "Sid": "PassOnlyTheAdminTaskRole",
+      "Sid": "PassOnlyTheAdminTaskRoles",
       "Effect": "Allow",
       "Action": "iam:PassRole",
-      "Resource": "arn:aws:iam::ACCOUNT_ID:role/NfAttendance-Admin-AdminTaskExecutionRole*",
+      "Resource": "arn:aws:iam::ACCOUNT_ID:role/NfAttendance-Admin-AdminTask*",
       "Condition": { "StringEquals": { "iam:PassedToService": "ecs-tasks.amazonaws.com" } }
     },
     {

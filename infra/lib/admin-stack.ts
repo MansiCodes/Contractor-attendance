@@ -42,6 +42,14 @@ export class AdminStack extends Stack {
       managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName("service-role/AmazonECSTaskExecutionRolePolicy")],
     });
 
+    // The admin scripts call no AWS API, so their task role has no permissions at all.
+    // Declared explicitly (CDK would otherwise add an unnamed default role); both role
+    // names start with "NfAttendance-Admin-AdminTask", which the deployer may pass to ECS.
+    const taskRole = new iam.Role(this, "AdminTaskRole", {
+      description: "Role of the admin task's code: no AWS permissions",
+      assumedBy: new iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
+    });
+
     const logGroup = new logs.LogGroup(this, "AdminTaskLogs", {
       logGroupName: "/nf-attendance/admin-tasks",
       retention: logs.RetentionDays.ONE_MONTH,
@@ -52,6 +60,7 @@ export class AdminStack extends Stack {
       cpu: 256,
       memoryLimitMiB: 512,
       executionRole,
+      taskRole,
     });
     task.addContainer("admin", {
       containerName: "admin",

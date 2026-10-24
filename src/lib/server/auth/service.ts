@@ -35,8 +35,9 @@ export async function signIn(db: Database, email: string, password: string, meta
   if (!user.is_active) return { ok: false, error: "This account is not active. Contact NF head office." };
   const { token, hash } = newSessionToken();
   const started = await scoped(db, { kind: "auth" }, (q) =>
-    q.query<{ expires_at: Date | string; must_change_password: boolean }>("select * from auth.sign_in_succeeded($1, $2, $3, $4, $5)", [
+    q.query<{ expires_at: Date | string; must_change_password: boolean }>("select * from auth.sign_in_succeeded($1, $2, $3, $4, $5, $6)", [
       user.user_id,
+      user.password_hash, // the hash just verified: the database refuses if it changed meanwhile
       hash,
       SESSION_TTL_SECONDS,
       meta.userAgent ?? null,
@@ -46,6 +47,8 @@ export async function signIn(db: Database, email: string, password: string, meta
     throw mapDbError(e);
   });
   const row = started.rows[0];
+  // No row: the password was changed or reset while it was being checked.
+  if (!row) return { ok: false, error: WRONG };
   return { ok: true, token, expiresAt: new Date(row.expires_at), mustChangePassword: row.must_change_password };
 }
 

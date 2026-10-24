@@ -97,8 +97,11 @@ begin
 end;
 $$;
 
--- A correct password: clears failures and starts a session.
-create or replace function auth.sign_in_succeeded(p_user_id uuid, p_token_hash bytea, p_ttl_seconds integer, p_user_agent text, p_ip text)
+-- A correct password: clears failures and starts a session. p_password_hash is the
+-- stored hash the server just verified. The row is locked and compared, so a password
+-- changed or reset meanwhile (which ends existing sessions) cannot be followed by a
+-- new session for the old password: nothing is returned and the sign-in fails.
+create or replace function auth.sign_in_succeeded(p_user_id uuid, p_password_hash text, p_token_hash bytea, p_ttl_seconds integer, p_user_agent text, p_ip text)
 returns table (session_id uuid, expires_at timestamptz, must_change_password boolean)
 language plpgsql
 security definer
@@ -108,7 +111,12 @@ declare
   v_session uuid;
   v_expires timestamptz := now() + make_interval(secs => greatest(60, least(p_ttl_seconds, 30 * 86400)));
   v_must boolean;
+  v_hash text;
 begin
+  select u.password_hash into v_hash from auth.users u where u.id = p_user_id for update;
+  if not found or v_hash is null or v_hash is distinct from p_password_hash then
+    return; -- the credential changed after it was checked
+  end if;
   if not exists (select 1 from public.profiles p where p.id = p_user_id and p.is_active) then
     raise exception 'forbidden: this account is not active';
   end if;
@@ -259,13 +267,13 @@ values (
 -- Grants
 -- ---------------------------------------------------------------------------
 revoke execute on function
-  auth.sign_in_lookup(text), auth.sign_in_failed(uuid), auth.sign_in_succeeded(uuid, bytea, integer, text, text),
+  auth.sign_in_lookup(text), auth.sign_in_failed(uuid), auth.sign_in_succeeded(uuid, text, bytea, integer, text, text),
   auth.session_user(bytea), auth.end_session(bytea), auth.change_own_password(text, uuid),
   auth.admin_create_account(text, text, public.app_role, text), auth.admin_reset_password(uuid, text),
   public.profiles_end_sessions()
 from public, anon, authenticated, service_role;
 grant execute on function
-  auth.sign_in_lookup(text), auth.sign_in_failed(uuid), auth.sign_in_succeeded(uuid, bytea, integer, text, text),
+  auth.sign_in_lookup(text), auth.sign_in_failed(uuid), auth.sign_in_succeeded(uuid, text, bytea, integer, text, text),
   auth.session_user(bytea), auth.end_session(bytea)
 to app_auth;
 grant execute on function
