@@ -14,11 +14,12 @@ const { makeHandler } = require("../../infra/lambda/dispatch.cjs") as {
   }) => () => Promise<unknown>;
 };
 
-const URL_OK = "https://nf-attendance.ecs.ap-south-1.on.aws/api/whatsapp/dispatch";
+const HOST = "nf-attendance.ecs.ap-south-1.on.aws";
+const URL_OK = `https://${HOST}/api/whatsapp/dispatch`;
 const ARN = "arn:aws:secretsmanager:ap-south-1:111111111111:secret:nf-attendance/app";
 const SECRET = "s".repeat(48);
 
-function setup(responses: { status: number; body: unknown }[], env: Record<string, string | undefined> = { DISPATCH_URL: URL_OK, CRON_SECRET_ARN: ARN }) {
+function setup(responses: { status: number; body: unknown }[], env: Record<string, string | undefined> = { APP_ENDPOINT: HOST, CRON_SECRET_ARN: ARN }) {
   const getSecret = vi.fn(async () => SECRET);
   const calls: { url: string; init: RequestInit }[] = [];
   const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
@@ -61,10 +62,18 @@ describe("scheduled dispatch Lambda", () => {
     await expect(handler()).rejects.toThrow("HTTP 500");
   });
 
-  it("refuses a plain-HTTP or wrong target before reading any secret", async () => {
-    for (const DISPATCH_URL of ["http://nf.example/api/whatsapp/dispatch", "https://nf.example/api/other", undefined]) {
-      const { handler, getSecret, fetchImpl } = setup([], { DISPATCH_URL, CRON_SECRET_ARN: ARN });
-      await expect(handler()).rejects.toThrow("DISPATCH_URL");
+  it("accepts the endpoint with or without https:// and a trailing slash", async () => {
+    for (const APP_ENDPOINT of [HOST, `https://${HOST}`, `https://${HOST}/`]) {
+      const { handler, calls } = setup([{ status: 200, body: {} }], { APP_ENDPOINT, CRON_SECRET_ARN: ARN });
+      await handler();
+      expect(calls[0].url).toBe(URL_OK);
+    }
+  });
+
+  it("refuses plain HTTP, a path or a missing endpoint before reading any secret", async () => {
+    for (const APP_ENDPOINT of ["http://nf.example", "https://nf.example/other", "", undefined]) {
+      const { handler, getSecret, fetchImpl } = setup([], { APP_ENDPOINT, CRON_SECRET_ARN: ARN });
+      await expect(handler()).rejects.toThrow("APP_ENDPOINT");
       expect(getSecret).not.toHaveBeenCalled();
       expect(fetchImpl).not.toHaveBeenCalled();
     }

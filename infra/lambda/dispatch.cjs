@@ -23,11 +23,18 @@ async function readCronSecret(secretArn) {
   return value;
 }
 
+/** APP_ENDPOINT is the ECS Express endpoint, with or without "https://". Only HTTPS is accepted. */
+function dispatchUrl(endpoint) {
+  const raw = (endpoint || "").trim().replace(/\/+$/, "");
+  const base = /^[a-z]+:\/\//i.test(raw) ? raw : `https://${raw}`;
+  if (!/^https:\/\/[a-z0-9.-]+(:\d+)?$/i.test(base)) throw new Error("APP_ENDPOINT must be the app's https host");
+  return `${base}/api/whatsapp/dispatch`;
+}
+
 function makeHandler({ getSecret = readCronSecret, fetchImpl = fetch, env = process.env, log = console } = {}) {
   let secret = null; // cached while the Lambda environment stays warm
   return async function handler() {
-    const url = env.DISPATCH_URL || "";
-    if (!/^https:\/\/[^/]+\/api\/whatsapp\/dispatch$/.test(url)) throw new Error("DISPATCH_URL must be https://<app host>/api/whatsapp/dispatch");
+    const url = dispatchUrl(env.APP_ENDPOINT);
     if (!env.CRON_SECRET_ARN) throw new Error("CRON_SECRET_ARN is not set");
     if (!secret) secret = await getSecret(env.CRON_SECRET_ARN);
 

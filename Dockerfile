@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.7
 # Production image for Amazon ECS on Fargate (linux/amd64). The same image runs
 # the web app and, as one-off tasks, the database migrations and first-admin script.
 #
@@ -8,21 +7,23 @@
 # from a `git archive` of committed files only, so no .env, data or master files can
 # end up in it (.dockerignore is a second guard).
 
-ARG NODE_VERSION=24
+# Official Node.js images from the ECR Public mirror of Docker Hub, which avoids
+# Docker Hub's anonymous pull limits on shared build machines (CodeBuild).
+ARG NODE_IMAGE=public.ecr.aws/docker/library/node:24-bookworm-slim
 
-FROM node:${NODE_VERSION}-bookworm-slim AS deps
+FROM ${NODE_IMAGE} AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
-FROM node:${NODE_VERSION}-bookworm-slim AS build
+FROM ${NODE_IMAGE} AS build
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
 
-FROM node:${NODE_VERSION}-bookworm-slim AS runtime
+FROM ${NODE_IMAGE} AS runtime
 WORKDIR /app
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
@@ -30,7 +31,8 @@ ENV NODE_ENV=production \
     HOSTNAME=0.0.0.0
 # Certificate authorities for Amazon RDS, so DATABASE_SSL=verify-full can check the
 # database server's certificate (DATABASE_SSL_CA points here).
-ADD --chmod=644 https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /app/certs/rds-global-bundle.pem
+ADD https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /app/certs/rds-global-bundle.pem
+RUN chmod 644 /app/certs/rds-global-bundle.pem
 
 # The self-contained Next.js server (output: "standalone") and its static files.
 COPY --from=build --chown=node:node /app/.next/standalone ./

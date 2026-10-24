@@ -8,7 +8,7 @@
 //   npm run dev:pg              the app in development mode against it
 //
 // PGlite serves one connection at a time, so the app uses a pool of one. For a
-// database closer to Amazon RDS, use a real PostgreSQL 17 (docker-compose.yml).
+// database closer to Amazon RDS, use a real PostgreSQL 18 (docker-compose.yml).
 import { mkdirSync } from "node:fs";
 import { PGlite } from "@electric-sql/pglite";
 import { btree_gist } from "@electric-sql/pglite/contrib/btree_gist";

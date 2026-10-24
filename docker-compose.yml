@@ -1,5 +1,5 @@
-# Optional: a real PostgreSQL 17 for development mode, closer to Amazon RDS than
-# the built-in PGlite server (npm run db:dev). Needs Docker or Podman.
+# Optional: a real PostgreSQL 18 (the version used on Amazon RDS) for development
+# mode, closer to RDS than the built-in PGlite server (npm run db:dev). Needs Docker or Podman.
 #
 #   docker compose up -d
 #   $env:MIGRATION_DATABASE_URL = "postgres://postgres@127.0.0.1:54330/postgres"   (PowerShell)
@@ -11,13 +11,14 @@
 # so it must never be exposed beyond this computer.
 services:
   postgres:
-    image: postgres:17
+    image: postgres:18
     environment:
       POSTGRES_HOST_AUTH_METHOD: trust
     ports:
       - "127.0.0.1:54330:5432"
     volumes:
-      - ./.data/postgres:/var/lib/postgresql/data
+      # PostgreSQL 18 images keep data under /var/lib/postgresql/<major>/docker
+      - ./.data/postgres:/var/lib/postgresql
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "postgres"]
       interval: 5s
