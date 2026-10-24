@@ -11,3 +11,18 @@ playwright-report
 test-results
 coverage
 .vercel
+*.log
+
+# Local development database, uploaded photos and backups (may hold real worker data)
+.data/
+
+# Worker master workbooks and scanned registers must never be committed
+*.xlsx
+*.xls
+*.xlsm
+*.csv
+*.pdf
+
+# Infrastructure build output
+infra/cdk.out/
+infra/node_modules/

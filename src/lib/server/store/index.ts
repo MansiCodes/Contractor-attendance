@@ -1,34 +1,41 @@
 import "server-only";
 import { getAppMode } from "@/lib/config";
+import type { Actor } from "@/lib/domain/types";
 import type { DataStore } from "./types";
 
 /**
- * Returns the store for the current request. Demo and live data are fully
- * isolated: in live mode the demo module is never loaded, and a failing
- * Supabase call surfaces as an error instead of falling back to demo data.
+ * The store for one signed-in user. Demo and database data are fully isolated: with
+ * a database configured the demo module is never loaded, and a failing database
+ * surfaces as an error instead of falling back to demo data.
  */
-export async function getStore(): Promise<DataStore> {
+export async function getStore(actor: Actor): Promise<DataStore> {
   if (getAppMode() === "demo") {
     const { getDemoStore } = await import("./demo-store");
     return getDemoStore();
   }
-  const [{ createServerSupabase }, { SupabaseStore }] = await Promise.all([
-    import("@/lib/supabase/server"),
-    import("./supabase-store"),
+  const [{ PostgresStore }, { pgDatabase }, { getObjectStorage }] = await Promise.all([
+    import("./postgres-store"),
+    import("../db/pool"),
+    import("../storage"),
   ]);
-  return new SupabaseStore(await createServerSupabase());
+  return new PostgresStore(pgDatabase(), { kind: "user", userId: actor.id }, getObjectStorage());
 }
 
 /**
- * Store for server jobs with no signed-in user: the scheduled WhatsApp dispatcher
- * and the provider webhook. In live mode it uses the service role (no RLS), so it
- * is only ever called after the job's own secret has been verified.
+ * Store for server jobs with no signed-in user: the scheduled WhatsApp dispatcher and
+ * the provider webhook. It acts as the system account (an admin profile that cannot
+ * sign in), so Row Level Security still applies. Only call it after the job's own
+ * secret or signature has been verified.
  */
 export async function getServiceStore(): Promise<DataStore> {
   if (getAppMode() === "demo") {
     const { getDemoStore } = await import("./demo-store");
     return getDemoStore();
   }
-  const [{ createAdminSupabase }, { SupabaseStore }] = await Promise.all([import("@/lib/supabase/server"), import("./supabase-store")]);
-  return new SupabaseStore(createAdminSupabase());
+  const [{ PostgresStore }, { pgDatabase }, { getObjectStorage }] = await Promise.all([
+    import("./postgres-store"),
+    import("../db/pool"),
+    import("../storage"),
+  ]);
+  return new PostgresStore(pgDatabase(), { kind: "system" }, getObjectStorage());
 }

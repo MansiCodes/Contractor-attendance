@@ -1,0 +1,25 @@
+# Optional: a real PostgreSQL 17 for development mode, closer to Amazon RDS than
+# the built-in PGlite server (npm run db:dev). Needs Docker or Podman.
+#
+#   docker compose up -d
+#   $env:MIGRATION_DATABASE_URL = "postgres://postgres@127.0.0.1:54330/postgres"   (PowerShell)
+#   npm run db:migrate -- --apply --confirm-target 127.0.0.1/postgres
+#   $env:DEV_APP_DATABASE_URL = "postgres://postgres@127.0.0.1:54330/postgres"
+#   npm run dev:pg
+#
+# It listens on 127.0.0.1 only and accepts local connections without a password,
+# so it must never be exposed beyond this computer.
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "127.0.0.1:54330:5432"
+    volumes:
+      - ./.data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10

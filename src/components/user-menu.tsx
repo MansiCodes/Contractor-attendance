@@ -24,6 +24,7 @@ function initials(name: string) {
 
 export function UserMenu({ name, role, demo }: { name: string; role: "admin" | "operator"; demo: boolean }) {
   const [pwOpen, setPwOpen] = useState(false);
+  const [current, setCurrent] = useState("");
   const [password, setPassword] = useState("");
   const [busy, start] = useTransition();
   return (
@@ -70,18 +71,23 @@ export function UserMenu({ name, role, demo }: { name: string; role: "admin" | "
             <DialogTitle>Change password</DialogTitle>
           </DialogHeader>
           <div className="space-y-2">
+            <Label htmlFor="current-password">Current password</Label>
+            <Input id="current-password" type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} />
+          </div>
+          <div className="space-y-2">
             <Label htmlFor="new-password">New password</Label>
             <Input id="new-password" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} />
-            <p className="text-xs text-muted-foreground">At least 8 characters.</p>
+            <p className="text-xs text-muted-foreground">At least 10 characters. You stay signed in here; other devices are signed out.</p>
           </div>
           <DialogFooter>
             <Button
-              disabled={busy || password.length < 8}
+              disabled={busy || password.length < 10 || !current}
               onClick={() =>
                 start(async () => {
-                  const res = await changePasswordAction({ password });
+                  const res = await changePasswordAction({ current, password });
                   if (res.ok) {
                     toast.success("Password changed");
+                    setCurrent("");
                     setPassword("");
                     setPwOpen(false);
                   } else toast.error(res.error);

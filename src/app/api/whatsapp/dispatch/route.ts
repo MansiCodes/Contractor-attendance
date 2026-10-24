@@ -8,10 +8,12 @@ import { getTransport } from "@/lib/server/messaging/transport";
 import { getServiceStore } from "@/lib/server/store";
 
 // Scheduled WhatsApp dispatch. Call it every 10–15 minutes from a scheduler that
-// runs independently of any browser or dev server (Vercel Cron, Supabase pg_cron
-// + pg_net, or any external cron) with "Authorization: Bearer <CRON_SECRET>".
-// It queues the day's messages once after the configured send time and sends due
-// retries. Nothing is scheduled by this repository itself.
+// runs independently of any browser or dev server, with "Authorization: Bearer
+// <CRON_SECRET>". On AWS that is EventBridge Scheduler invoking the small Lambda in
+// infra/lambda/dispatch.cjs (created disabled; see docs/aws/deployment.md). It
+// queues the day's messages once after the configured send time and sends due
+// retries. The queue itself is the outbound_messages table, so a missed or repeated
+// call is harmless.
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

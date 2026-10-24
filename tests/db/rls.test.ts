@@ -49,6 +49,7 @@ describe("migrations", () => {
       { email: "a@example.test", role: "operator" },
       { email: "admin@example.test", role: "admin" },
       { email: "b@example.test", role: "operator" },
+      { email: "system@nf-attendance.invalid", role: "admin" }, // scheduled jobs; cannot sign in
     ]);
   });
 

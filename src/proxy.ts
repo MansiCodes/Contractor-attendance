@@ -1,25 +1,17 @@
-import { createServerClient } from "@supabase/ssr";
-import { NextResponse, type NextRequest } from "next/server";
+import { NextResponse } from "next/server";
 
-// Refreshes the Supabase auth session cookie on each request (live mode only).
-// Authorization itself is enforced in server code and database RLS, not here.
-export async function proxy(request: NextRequest) {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (process.env.APP_MODE === "demo" || !url || !key) return NextResponse.next();
-
-  let response = NextResponse.next({ request });
-  const supabase = createServerClient(url, key, {
-    cookies: {
-      getAll: () => request.cookies.getAll(),
-      setAll: (list) => {
-        for (const { name, value } of list) request.cookies.set(name, value);
-        response = NextResponse.next({ request });
-        for (const { name, value, options } of list) response.cookies.set(name, value, options);
-      },
-    },
-  });
-  await supabase.auth.getUser();
+// Adds browser security headers to every page and API response. Sessions need no
+// refreshing here: the session cookie is checked against the database per request.
+export function proxy() {
+  const response = NextResponse.next();
+  const h = response.headers;
+  h.set("X-Content-Type-Options", "nosniff");
+  h.set("X-Frame-Options", "DENY");
+  h.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  h.set("Permissions-Policy", "geolocation=(), microphone=(), camera=(), payment=()");
+  if (process.env.APP_MODE === "production" || process.env.APP_MODE === "live") {
+    h.set("Strict-Transport-Security", "max-age=31536000");
+  }
   return response;
 }
 

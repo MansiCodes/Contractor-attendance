@@ -112,7 +112,7 @@ export interface AuditQuery {
 }
 
 export interface DataStore {
-  readonly kind: "demo" | "supabase";
+  readonly kind: "demo" | "postgres" | "supabase";
 
   getProfile(id: string): Promise<Profile | null>;
   listProfiles(): Promise<Profile[]>;

@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:pg": "node scripts/dev-app.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
@@ -13,9 +14,18 @@
     "test:db": "vitest run tests/db",
     "test:e2e": "playwright test",
     "check": "npm run typecheck && npm run lint && npm test",
-    "create-admin": "node --env-file=.env.local scripts/create-admin.mjs"
+    "db:dev": "node scripts/dev-db.mjs",
+    "db:dev:migrate": "node scripts/db/migrate.mjs --dev --apply",
+    "db:dev:admin": "node scripts/create-admin.mjs --dev",
+    "db:migrate": "node scripts/db/migrate.mjs",
+    "create-admin": "node scripts/create-admin.mjs",
+    "hash-password": "node scripts/hash-password.mjs",
+    "infra:test": "npm --prefix infra test",
+    "infra:synth": "npm --prefix infra run synth"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1156.0",
+    "@aws-sdk/s3-request-presigner": "^3.1156.0",
     "@date-fns/tz": "^1.5.0",
     "@hookform/resolvers": "^5.9.2",
     "@supabase/ssr": "^0.12.7",
@@ -27,6 +37,7 @@
     "exceljs": "^4.4.0",
     "lucide-react": "^1.60.0",
     "next": "^16.4.2",
+    "pg": "^8.23.1",
     "radix-ui": "^1.8.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
@@ -37,10 +48,12 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@electric-sql/pglite": "^0.5.10",
+    "@electric-sql/pglite": "^0.5.11",
+    "@electric-sql/pglite-socket": "^0.2.14",
     "@playwright/test": "^1.64.1",
     "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^24.19.2",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",

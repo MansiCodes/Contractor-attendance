@@ -32,7 +32,7 @@ export function providerStatus(env: Env = process.env): ProviderStatus {
   };
   const switchOn = env.WHATSAPP_LIVE_SENDING?.trim() === "enabled";
   let reason: string | null = null;
-  if (getAppMode(env) !== "live") reason = "Demo mode: messages are simulated, nothing is sent.";
+  if (getAppMode(env) !== "production") reason = `${getAppMode(env) === "demo" ? "Demo" : "Development"} mode: messages are simulated, nothing is sent.`;
   else if (!switchOn) reason = "Live sending is switched off (WHATSAPP_LIVE_SENDING is not 'enabled'). Messages are simulated.";
   else if (!configured.accessToken || !configured.phoneNumberId) reason = "WhatsApp Cloud API credentials are missing. Messages are simulated.";
   const live = reason === null;

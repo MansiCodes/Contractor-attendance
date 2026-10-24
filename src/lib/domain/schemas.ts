@@ -148,8 +148,9 @@ export const workerReactivate = z.object({ projectId: id, startDate: dateString 
 export const operatorCreate = z.object({
   fullName: name("Name"),
   email: z.string().trim().toLowerCase().email("Enter a valid email"),
-  // Required in live mode (checked by the service); not used in demo mode.
-  password: z.preprocess((v) => (v === "" ? undefined : v), z.string().min(8, "At least 8 characters").max(72).optional()),
+  // Required with a database (checked by the service); not used in demo mode. The
+  // operator must change this temporary password at the first sign-in.
+  password: z.preprocess((v) => (v === "" ? undefined : v), z.string().min(10, "At least 10 characters").max(128).optional()),
 });
 
 const money = z.coerce.number().min(0, "Cannot be negative").max(1_000_000);

@@ -32,7 +32,7 @@ export default async function ProjectsPage({ searchParams }: { searchParams: Sea
       <PageHeader
         title="Plants"
         description="Manufacturing plants, the contractors working in them, and who records attendance there."
-        actions={tab === "plants" ? <AddProjectDialog defaultTimezone={defaultTimezone} /> : <AddOperatorDialog live={getAppMode() === "live"} />}
+        actions={tab === "plants" ? <AddProjectDialog defaultTimezone={defaultTimezone} /> : <AddOperatorDialog live={getAppMode() !== "demo"} />}
       />
 
       <SegmentedLinks

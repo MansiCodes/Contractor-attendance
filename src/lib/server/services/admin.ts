@@ -160,7 +160,7 @@ export async function transferWorker(ctx: ServiceContext, workerId: string, raw:
 export async function createOperator(ctx: ServiceContext, raw: unknown): Promise<Profile> {
   assertAdmin(ctx);
   const input = operatorCreate.parse(raw);
-  if (ctx.store.kind === "supabase" && !input.password) throw invalid("Set a temporary password for the operator");
+  if (ctx.store.kind !== "demo" && !input.password) throw invalid("Set a temporary password for the operator");
   return ctx.store.createOperator(input, ctx.actor);
 }
 

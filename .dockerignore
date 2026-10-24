@@ -1,0 +1,30 @@
+# Keep the build context to source code only. Secrets, local data and worker
+# master files must never reach an image.
+.git
+node_modules
+.next
+out
+build
+coverage
+playwright-report
+test-results
+*.tsbuildinfo
+next-env.d.ts
+
+.env
+.env.*
+.data
+*.log
+*.xlsx
+*.xls
+*.xlsm
+*.csv
+*.pdf
+
+.claude
+.vercel
+infra
+docs
+tests
+docker-compose.yml
+Dockerfile

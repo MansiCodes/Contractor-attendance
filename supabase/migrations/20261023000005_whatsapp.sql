@@ -50,15 +50,30 @@ as $$
 begin
   new.updated_at := now();
   new.updated_by := coalesce(auth.uid(), new.updated_by);
-  if tg_op = 'INSERT' or new.consent_status is distinct from old.consent_status then
-    insert into public.worker_consent_events (worker_id, consent_status, source, by)
-    values (new.worker_id, new.consent_status, new.consent_source, auth.uid());
-  end if;
   return new;
 end;
 $$;
 create trigger worker_contacts_stamp before insert or update on public.worker_contacts
   for each row execute function public.worker_contacts_stamp();
+
+-- Consent history. An AFTER trigger, so an upsert (insert ... on conflict do update)
+-- logs only the change that actually happened, once.
+create or replace function public.worker_contacts_log_consent()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if tg_op = 'INSERT' or new.consent_status is distinct from old.consent_status then
+    insert into public.worker_consent_events (worker_id, consent_status, source, by)
+    values (new.worker_id, new.consent_status, new.consent_source, auth.uid());
+  end if;
+  return null;
+end;
+$$;
+create trigger worker_contacts_log_consent after insert or update on public.worker_contacts
+  for each row execute function public.worker_contacts_log_consent();
 
 create table public.messaging_settings (
   id smallint primary key default 1 check (id = 1),
@@ -67,8 +82,8 @@ create table public.messaging_settings (
   send_time time not null default '20:00',
   default_language text not null default 'hi' check (default_language in ('hi', 'hi_latn', 'en')),
   include_english boolean not null default false,
-  attendance_template text not null default 'attendance_summary_hi' check (attendance_template ~ '^[a-z0-9_]{1,512}$'),
-  correction_template text not null default 'attendance_correction_hi' check (correction_template ~ '^[a-z0-9_]{1,512}$'),
+  attendance_template text not null default 'attendance_summary_hi' check (char_length(attendance_template) between 1 and 512 and attendance_template ~ '^[a-z0-9_]+$'),
+  correction_template text not null default 'attendance_correction_hi' check (char_length(correction_template) between 1 and 512 and correction_template ~ '^[a-z0-9_]+$'),
   correction_notices boolean not null default true,
   -- No retroactive messages: only work dates on or after this.
   start_date date not null,
@@ -234,7 +249,8 @@ grant usage, select on all sequences in schema public to service_role;
 
 revoke execute on function
   public.messaging_claim_due(timestamptz, integer), public.messaging_apply_status(text, text, timestamptz, text, jsonb),
-  public.messaging_apply_status_only(text, text, timestamptz, text), public.messaging_replay_statuses(text), public.worker_contacts_stamp()
+  public.messaging_apply_status_only(text, text, timestamptz, text), public.messaging_replay_statuses(text), public.worker_contacts_stamp(),
+  public.worker_contacts_log_consent()
   from public, anon, authenticated;
 grant execute on function
   public.messaging_claim_due(timestamptz, integer), public.messaging_apply_status(text, text, timestamptz, text, jsonb),

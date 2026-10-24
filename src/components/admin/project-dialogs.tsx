@@ -292,7 +292,7 @@ export function AddOperatorDialog({ live }: { live: boolean }) {
         <DialogHeader>
           <DialogTitle>Add attendance operator</DialogTitle>
           <DialogDescription>
-            {live ? "Creates a sign-in account. Share the email and temporary password with the operator; they can change it after signing in." : "Demo mode: creates a demo operator you can sign in as."}
+            {live ? "Creates a sign-in account. Give the operator the email and temporary password in person; they must choose their own password at the first sign-in." : "Demo mode: creates a demo operator you can sign in as."}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4" noValidate>
@@ -303,7 +303,7 @@ export function AddOperatorDialog({ live }: { live: boolean }) {
             <Input id="o-email" type="email" {...form.register("email")} />
           </Field>
           {live && (
-            <Field label="Temporary password" htmlFor="o-pw" hint="At least 8 characters" error={e.password?.message}>
+            <Field label="Temporary password" htmlFor="o-pw" hint="At least 10 characters. The operator changes it at the first sign-in." error={e.password?.message}>
               <Input id="o-pw" type="text" autoComplete="off" {...form.register("password")} />
             </Field>
           )}

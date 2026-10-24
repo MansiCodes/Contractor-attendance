@@ -128,14 +128,12 @@ describe("day and night shifts", () => {
     expect((await one<{ shift: string }>(db, `select shift from public.attendance_records where worker_id = $1`, [ids.w2])).shift).toBe("day");
   });
 
-  it("the service role used by the scheduler can read attendance", async () => {
-    await db.exec(`set role service_role`);
-    try {
+  it("the system account used by the scheduler reads attendance under Row Level Security", async () => {
+    const SYSTEM = "00000000-0000-4000-8000-000000000001";
+    await asUser(db, SYSTEM, async () => {
       expect((await one<{ n: number }>(db, `select count(*)::int as n from public.attendance_records`)).n).toBeGreaterThan(0);
       expect((await one<{ n: number }>(db, `select count(*)::int as n from public.attendance_policies`)).n).toBeGreaterThan(0);
-    } finally {
-      await db.exec(`reset role`);
-    }
+    });
   });
 
   it("resolves the night suggested IN in SQL exactly as in TypeScript", async () => {

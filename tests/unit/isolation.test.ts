@@ -1,56 +1,69 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppError } from "@/lib/errors";
-import { getAppMode } from "@/lib/config";
-import { mapDbError } from "@/lib/server/store/supabase-store";
+import { databaseConfig, getAppMode, storageConfig } from "@/lib/config";
+import { mapDbError } from "@/lib/server/db/errors";
 import * as map from "@/lib/server/store/supabase-mappers";
 
-const LIVE = { NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co", NEXT_PUBLIC_SUPABASE_ANON_KEY: "anon" };
+const DB = { DATABASE_URL: "postgres://app:secret@db.internal:5432/attendance" };
+const ACTOR = { id: "00000000-0000-4000-8000-0000000000aa", role: "admin" as const, fullName: "A", email: "a@example.test" };
 
 describe("16. demo data cannot leak into production", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.resetModules();
     vi.doUnmock("@/lib/server/store/demo-store");
-    vi.doUnmock("@/lib/supabase/server");
+    vi.doUnmock("@/lib/server/db/pool");
   });
 
-  it("chooses live mode whenever Supabase is configured", () => {
-    expect(getAppMode(LIVE)).toBe("live");
-    expect(getAppMode({})).toBe("demo");
-    expect(getAppMode({ ...LIVE, APP_MODE: "demo" })).toBe("demo");
-  });
-
-  it("APP_MODE=live without credentials is a hard error, never a silent demo fallback", () => {
-    expect(() => getAppMode({ APP_MODE: "live" })).toThrow(AppError);
+  it("uses only the mode it is told; demo never switches on by itself", () => {
+    expect(getAppMode({ APP_MODE: "demo" })).toBe("demo");
+    expect(getAppMode({ APP_MODE: "development", ...DB })).toBe("development");
+    expect(getAppMode({ APP_MODE: "production", ...DB })).toBe("production");
+    expect(getAppMode({ APP_MODE: "live", ...DB })).toBe("production"); // older name
+    expect(getAppMode({})).toBe("demo"); // local `npm run dev` with nothing configured
+    // A configured database or a production build without APP_MODE is an error, not the demo.
+    expect(() => getAppMode(DB)).toThrow(AppError);
+    expect(() => getAppMode({ NODE_ENV: "production" })).toThrow(AppError);
     expect(() => getAppMode({ APP_MODE: "staging" })).toThrow(AppError);
   });
 
-  it("in live mode the store factory never loads the demo store", async () => {
-    vi.stubEnv("APP_MODE", "live");
-    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", LIVE.NEXT_PUBLIC_SUPABASE_URL);
-    vi.stubEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY", LIVE.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+  it("database modes need a database, and production needs verified TLS and S3", () => {
+    expect(() => databaseConfig({ APP_MODE: "production" })).toThrow(/not configured/);
+    expect(() => databaseConfig({ APP_MODE: "production", ...DB, DATABASE_SSL: "disable" })).toThrow(/verify-full/);
+    expect(databaseConfig({ APP_MODE: "production", ...DB })).toMatchObject({ host: "db.internal", database: "attendance", user: "app", password: "secret", ssl: "verify-full" });
+    expect(databaseConfig({ APP_MODE: "development", DATABASE_HOST: "localhost", DATABASE_NAME: "nf", DATABASE_USER: "u", DATABASE_PASSWORD: "p" })).toMatchObject({ ssl: "disable", port: 5432 });
+    expect(() => storageConfig({ APP_MODE: "production", ...DB, STORAGE_DRIVER: "local" })).toThrow(/S3/);
+    expect(() => storageConfig({ APP_MODE: "production", ...DB })).toThrow(/S3_BUCKET/);
+    expect(storageConfig({ APP_MODE: "production", ...DB, S3_BUCKET: "b", AWS_REGION: "ap-south-1" })).toEqual({ driver: "s3", bucket: "b", region: "ap-south-1" });
+  });
+
+  it("with a database the store factory never loads the demo store", async () => {
+    vi.stubEnv("APP_MODE", "production");
+    vi.stubEnv("DATABASE_URL", DB.DATABASE_URL);
+    vi.stubEnv("S3_BUCKET", "b");
+    vi.stubEnv("AWS_REGION", "ap-south-1");
     const demoLoaded = vi.fn();
     vi.doMock("@/lib/server/store/demo-store", () => {
       demoLoaded();
       return { getDemoStore: () => { throw new Error("demo store must not be used"); } };
     });
-    vi.doMock("@/lib/supabase/server", () => ({ createServerSupabase: async () => ({ fake: true }), createAdminSupabase: () => ({}) }));
-    const { getStore } = await import("@/lib/server/store");
-    const store = await getStore();
-    expect(store.kind).toBe("supabase");
+    vi.doMock("@/lib/server/db/pool", () => ({ pgDatabase: () => ({ transaction: async () => { throw new Error("no database in this test"); } }) }));
+    const { getStore, getServiceStore } = await import("@/lib/server/store");
+    expect((await getStore(ACTOR)).kind).toBe("postgres");
+    expect((await getServiceStore()).kind).toBe("postgres");
     expect(demoLoaded).not.toHaveBeenCalled();
   });
 
-  it("in demo mode the Supabase client is never created", async () => {
+  it("in demo mode no database connection is made", async () => {
     vi.stubEnv("APP_MODE", "demo");
-    const created = vi.fn();
-    vi.doMock("@/lib/supabase/server", () => {
-      created();
-      return { createServerSupabase: async () => ({}) };
+    const connected = vi.fn();
+    vi.doMock("@/lib/server/db/pool", () => {
+      connected();
+      return { pgDatabase: () => ({}) };
     });
     const { getStore } = await import("@/lib/server/store");
-    expect((await getStore()).kind).toBe("demo");
-    expect(created).not.toHaveBeenCalled();
+    expect((await getStore(ACTOR)).kind).toBe("demo");
+    expect(connected).not.toHaveBeenCalled();
   });
 
   it("demo session cookies are signed; forged ones are rejected", async () => {
@@ -65,14 +78,14 @@ describe("16. demo data cannot leak into production", () => {
   });
 });
 
-describe("Supabase error and row mapping", () => {
+describe("Database error and row mapping", () => {
   it("maps database errors to user-safe app errors", () => {
     expect(mapDbError({ message: "forbidden: only NF admins can do this" }).code).toBe("forbidden");
     expect(mapDbError({ message: "conflict: attendance was changed" }).code).toBe("conflict");
     expect(mapDbError({ message: "invalid: OUT time cannot be in the future" }).message).toBe("OUT time cannot be in the future");
     expect(mapDbError({ message: 'new row violates row-level security policy for table "workers"', code: "42501" }).code).toBe("forbidden");
     expect(mapDbError({ message: "duplicate", code: "23505" }).code).toBe("conflict");
-    expect(mapDbError({ message: "boom", code: "XX000" }).message).toContain("Database error");
+    expect(mapDbError({ message: "boom", code: "XX000" }).message).toContain("could not complete"); // details stay in the server log
   });
 
   it("maps rows to domain objects with normalised instants and numbers", () => {

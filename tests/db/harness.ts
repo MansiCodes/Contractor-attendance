@@ -3,32 +3,10 @@ import { join } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import { btree_gist } from "@electric-sql/pglite/contrib/btree_gist";
 
-// Runs the real Supabase migrations against an in-process Postgres (PGlite).
-// A minimal shim stands in for Supabase's `auth` and `storage` schemas and roles.
+// Runs the real migrations against an in-process Postgres (PGlite), after the same
+// platform bootstrap that is applied to Amazon RDS (db/platform/bootstrap.sql).
 
-const SHIM = `
-create role anon nologin;
-create role authenticated nologin;
-create role service_role nologin bypassrls;
-create schema auth;
-create table auth.users (
-  id uuid primary key default gen_random_uuid(),
-  email text,
-  raw_user_meta_data jsonb not null default '{}',
-  raw_app_meta_data jsonb not null default '{}'
-);
-create function auth.uid() returns uuid language sql stable as $$
-  select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid
-$$;
-grant usage on schema auth to anon, authenticated;
-grant execute on function auth.uid() to anon, authenticated;
-create schema storage;
-create table storage.buckets (id text primary key, name text not null, public boolean default false);
-create table storage.objects (id uuid primary key default gen_random_uuid(), bucket_id text references storage.buckets(id), name text, owner uuid);
-alter table storage.objects enable row level security;
-grant usage on schema storage to authenticated;
-grant select, insert, update, delete on storage.objects to authenticated;
-`;
+export const BOOTSTRAP_FILE = join(process.cwd(), "db", "platform", "bootstrap.sql");
 
 export const MIGRATIONS_DIR = join(process.cwd(), "supabase", "migrations");
 
@@ -38,8 +16,9 @@ export const MIGRATIONS_DIR = join(process.cwd(), "supabase", "migrations");
  * and then call applyMigrations({ after }).
  */
 export async function createDb(opts: { until?: string } = {}) {
-  const db = new PGlite({ extensions: { btree_gist } });
-  await db.exec(SHIM);
+  // Dates stay "yyyy-MM-dd" strings, as the app's PostgreSQL driver is configured to return them.
+  const db = new PGlite({ extensions: { btree_gist }, parsers: { 1082: (v: string) => v } });
+  await db.exec(readFileSync(BOOTSTRAP_FILE, "utf8"));
   await applyMigrations(db, { until: opts.until });
   return db;
 }
