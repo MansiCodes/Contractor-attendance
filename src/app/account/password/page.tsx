@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
+import { connection } from "next/server";
 import { BrandMark } from "@/components/brand";
 import { getAppMode } from "@/lib/config";
 import { getSignedIn } from "@/lib/server/session";
@@ -10,6 +11,8 @@ export const metadata: Metadata = { title: "Choose your password" };
 // Shown after signing in with a temporary password: nothing else opens until the
 // user has chosen their own password.
 export default async function ChoosePasswordPage() {
+  // Rendered per request only: the app mode is a run-time setting, absent at build time.
+  await connection();
   if (getAppMode() === "demo") redirect("/login");
   const signedIn = await getSignedIn();
   if (!signedIn) redirect("/login");

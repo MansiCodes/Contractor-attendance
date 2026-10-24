@@ -4,6 +4,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { cache } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { connection } from "next/server";
 import { getAppMode } from "@/lib/config";
 import { AppError } from "@/lib/errors";
 import type { Actor } from "@/lib/domain/types";
@@ -42,6 +43,9 @@ export interface SignedIn {
 
 /** The signed-in, active user and session — or null. Inactive users are treated as signed out. */
 export const getSignedIn = cache(async function getSignedIn(): Promise<SignedIn | null> {
+  // Sessions exist only at request time. This also keeps signed-in pages from being
+  // pre-rendered during `next build`, where the run-time APP_MODE is not set.
+  await connection();
   const mode = getAppMode();
   if (mode === "demo") {
     const userId = verifyDemoSession((await cookies()).get(DEMO_COOKIE)?.value);

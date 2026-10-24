@@ -149,9 +149,16 @@ describe("attendance writes, audit trail and integrity", () => {
   it("refuses OUT before IN, future OUT times and past dates for operators", async () => {
     const d = await today();
     await asUser(db, opA, async () => {
-      const t = (offset: string) => db.query<{ t: string }>(`select (now() + $1::interval)::text as t`, [offset]).then((r) => r.rows[0].t);
-      await expectError(db.query(`select * from public.save_attendance($1, $2::date, $3::jsonb)`, [projectA, d, item({ check_in_at: await t("-1 hour"), check_out_at: await t("-2 hours"), expected_version: 2 })]), /attendance_out_after_in|check constraint/);
-      await expectError(db.query(`select * from public.save_attendance($1, $2::date, $3::jsonb)`, [projectA, d, item({ check_in_at: await t("-1 hour"), check_out_at: await t("3 hours"), expected_version: 2 })]), /future/);
+      // Fixed local times on the attendance date, so the checks do not depend on the
+      // hour the suite runs (now ± hours can fall on another date near midnight).
+      const at = (time: string) =>
+        db.query<{ t: string }>(`select (($1::date + $2::time) at time zone 'Asia/Kolkata')::text as t`, [d, time]).then((r) => r.rows[0].t);
+      const minutesLeftToday = (await one<{ m: number }>(`select extract(epoch from (($1::date + 1) - (now() at time zone 'Asia/Kolkata'))) / 60 as m`, [d])).m;
+      await expectError(db.query(`select * from public.save_attendance($1, $2::date, $3::jsonb)`, [projectA, d, item({ check_in_at: await at("00:02"), check_out_at: await at("00:01"), expected_version: 2 })]), /attendance_out_after_in|check constraint/);
+      // A future OUT on the same date exists only until a few minutes before midnight.
+      if (minutesLeftToday > 10) {
+        await expectError(db.query(`select * from public.save_attendance($1, $2::date, $3::jsonb)`, [projectA, d, item({ check_in_at: await at("00:02"), check_out_at: await at("23:59"), expected_version: 2 })]), /future/);
+      }
       await expectError(db.query(`select * from public.save_attendance($1, ($2::date - 1), $3::jsonb)`, [projectA, d, item({ status: "absent" })]), /forbidden/);
     });
   });

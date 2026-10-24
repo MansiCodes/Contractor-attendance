@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
+import { connection } from "next/server";
 import { DemoBadge } from "@/components/app-shell";
 import { BrandMark } from "@/components/brand";
 import { getAppMode } from "@/lib/config";
@@ -9,6 +10,8 @@ import { DemoLogin, LiveLogin } from "./login-forms";
 export const metadata: Metadata = { title: "Sign in" };
 
 export default async function LoginPage() {
+  // Rendered per request only: the app mode is a run-time setting, absent at build time.
+  await connection();
   const mode = getAppMode();
   const actor = await getActor();
   if (actor) redirect(actor.role === "admin" ? "/admin" : "/attendance");
