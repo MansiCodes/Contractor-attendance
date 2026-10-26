@@ -76,7 +76,7 @@ describe("WhatsApp sending (mock transport, demo store)", () => {
     const s = providerStatus({ APP_MODE: "demo" });
     expect(s).toMatchObject({ transport: "mock", liveSendingEnabled: false });
     // Even in live mode, nothing is sent without the explicit switch and credentials.
-    const live = { APP_MODE: "live", NEXT_PUBLIC_SUPABASE_URL: "https://x.supabase.co", NEXT_PUBLIC_SUPABASE_ANON_KEY: "k" };
+    const live = { APP_MODE: "production" };
     expect(providerStatus(live).liveSendingEnabled).toBe(false);
     expect(providerStatus({ ...live, WHATSAPP_LIVE_SENDING: "enabled" }).liveSendingEnabled).toBe(false);
     expect(providerStatus({ ...live, WHATSAPP_LIVE_SENDING: "enabled", WHATSAPP_ACCESS_TOKEN: "t", WHATSAPP_PHONE_NUMBER_ID: "1" }).liveSendingEnabled).toBe(true);

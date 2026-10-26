@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppError } from "@/lib/errors";
 import { databaseConfig, getAppMode, storageConfig } from "@/lib/config";
 import { mapDbError } from "@/lib/server/db/errors";
-import * as map from "@/lib/server/store/supabase-mappers";
+import * as map from "@/lib/server/store/row-mappers";
 
 const DB = { DATABASE_URL: "postgres://app:secret@db.internal:5432/attendance" };
 const ACTOR = { id: "00000000-0000-4000-8000-0000000000aa", role: "admin" as const, fullName: "A", email: "a@example.test" };

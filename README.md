@@ -131,7 +131,7 @@ tests/                      unit, db (PGlite) and e2e (Playwright)
 - **Operator role**: the operator's job designation is still open. The app makes no assumption about whether the operator works for the contractor or for the company.
 - **Timezone**: new plants start with the company default from Settings (`Asia/Kolkata` initially). Each plant keeps its own timezone, which locks once attendance has been recorded there.
 - **Migrations**: none has been applied to a real database yet (all are tested in PGlite). On AWS they run through `scripts/db/migrate.mjs` (see the deployment guide).
-- **Old Supabase code**: `src/lib/server/store/supabase-store.ts`, `src/lib/supabase/server.ts` and the `@supabase/*` packages are unused; deleting them awaits approval. `.env.example` still shows the Supabase variables; the current ones are in [docs/aws/deployment.md](docs/aws/deployment.md) §9.
+- **`.env.example`** still shows the old Supabase variables (the Supabase code and packages themselves were removed on 26 Oct 2026). The current variables are in [docs/aws/deployment.md](docs/aws/deployment.md) §9.
 - **Undecided pay settings**: overtime pay (rate or multiplier), rounding, commission base and treatment, Shukla's rate basis and days per month, short-day handling, and which Sumit workers get commission. See [docs/contractor-master-and-pay.md](docs/contractor-master-and-pay.md).
 - **Contractor identity**: confirm whether the "Excellent" sheet is GAJENDRA RANA CONTRACTORS.
 - **WhatsApp**: not connected to Meta; live sending is off and the AWS schedule is created disabled. See [docs/whatsapp.md](docs/whatsapp.md) and [docs/aws/deployment.md](docs/aws/deployment.md) §12.

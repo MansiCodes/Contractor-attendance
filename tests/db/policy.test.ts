@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { operatorEditClosesAt, resolvePolicy, type AttendancePolicyVersion } from "@/lib/domain/policy";
-import { policyRow } from "@/lib/server/store/supabase-mappers";
+import { policyRow } from "@/lib/server/store/row-mappers";
 import { applyMigrations, asUser, createAuthUser, createDb, type Db } from "./harness";
 
 // Attendance policies in the database: the upgrade from the original schema,

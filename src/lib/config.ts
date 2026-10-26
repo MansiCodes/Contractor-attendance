@@ -116,10 +116,3 @@ export function storageConfig(env: Env = process.env): StorageConfig {
 
 /** Cookies are marked Secure in production (HTTPS at the load balancer) or when the request came over HTTPS. */
 export const secureCookies = (forwardedProto: string | null, env: Env = process.env) => getAppMode(env) === "production" || forwardedProto === "https";
-
-/** @deprecated Supabase is no longer used; kept only so the unused legacy Supabase files still compile. */
-export function supabaseConfig(env: Env = process.env) {
-  const url = env.NEXT_PUBLIC_SUPABASE_URL?.trim();
-  const anonKey = (env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? env.NEXT_PUBLIC_SUPABASE_ANON_KEY)?.trim();
-  return url && anonKey ? { url, anonKey } : null;
-}

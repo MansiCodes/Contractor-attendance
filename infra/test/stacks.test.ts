@@ -109,6 +109,12 @@ describe("costs and monitoring", () => {
     });
   });
 
+  it("can limit the budget to this app's tagged resources in a shared account", () => {
+    data.hasParameter("BudgetScope", { Default: "account", AllowedValues: ["account", "project-tag"] });
+    const [[, budget]] = resourcesOf(data, "AWS::Budgets::Budget");
+    assert.match(json(budget.Properties), /"CostFilters":\{"Fn::If":\["BudgetByProjectTag",\{"TagKeyValue":\["user:project\$nf-attendance"\]\},\{"Ref":"AWS::NoValue"\}\]\}/);
+  });
+
   it("sets a retention period on every log group", () => {
     for (const t of [data, admin, web]) {
       for (const [id, g] of resourcesOf(t, "AWS::Logs::LogGroup")) {

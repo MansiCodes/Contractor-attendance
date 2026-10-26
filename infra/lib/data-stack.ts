@@ -1,4 +1,5 @@
 import {
+  Aws,
   CfnCondition,
   CfnOutput,
   CfnParameter,
@@ -59,6 +60,17 @@ export class DataStack extends Stack {
       minValue: 10,
       description: "Monthly AWS cost (USD, before tax) that triggers budget alerts: 80% actual and 100% forecast.",
     });
+    // In an account shared with other workloads, an account-wide budget would alert on
+    // their spending too. "project-tag" counts only resources tagged project=nf-attendance;
+    // the tag must first be activated under Billing -> Cost allocation tags, and a few
+    // untaggable charges (some data transfer and IPv4) are then left out.
+    const budgetScope = new CfnParameter(this, "BudgetScope", {
+      type: "String",
+      default: "account",
+      allowedValues: ["account", "project-tag"],
+      description: "account: the whole AWS account's cost. project-tag: only resources tagged project=nf-attendance (activate that cost allocation tag first).",
+    });
+    const budgetByTag = new CfnCondition(this, "BudgetByProjectTag", { expression: Fn.conditionEquals(budgetScope.valueAsString, "project-tag") });
     const multiAz = new CfnParameter(this, "DatabaseMultiAz", {
       type: "String",
       default: "false",
@@ -246,6 +258,7 @@ export class DataStack extends Stack {
         budgetType: "COST",
         timeUnit: "MONTHLY",
         budgetLimit: { amount: monthlyBudget.valueAsNumber, unit: "USD" },
+        costFilters: Fn.conditionIf(budgetByTag.logicalId, { TagKeyValue: ["user:project$nf-attendance"] }, Aws.NO_VALUE),
       },
       notificationsWithSubscribers: [
         {

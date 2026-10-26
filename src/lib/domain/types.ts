@@ -1,4 +1,4 @@
-// Core domain types shared by the UI, services, demo store and Supabase store.
+// Core domain types shared by the UI, services, the demo store and the PostgreSQL store.
 // Calendar dates are "yyyy-MM-dd" strings in the project's local timezone.
 // Instants (check-in/out) are ISO-8601 UTC strings.
 

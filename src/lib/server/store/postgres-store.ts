@@ -22,7 +22,7 @@ import { createAccount } from "../auth/service";
 import { scoped, type Database, type DbIdentity, type Queryable, type Row } from "../db/database";
 import { mapDbError } from "../db/errors";
 import type { ObjectStorage } from "../storage";
-import * as map from "./supabase-mappers";
+import * as map from "./row-mappers";
 import type {
   AttendancePolicyFields,
   AttendanceQuery,
@@ -46,7 +46,7 @@ import type {
 // the signed-in user (or the system account for scheduled jobs), so the database's
 // Row Level Security, triggers and functions enforce the same rules as before:
 // an operator cannot read or change another plant's data even if the server asked.
-// Row conversions are shared with the earlier Supabase store (supabase-mappers.ts).
+// Row conversions (snake_case rows to domain objects) are in row-mappers.ts.
 
 const IDENT = /^[a-z_][a-z0-9_]*$/;
 

@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { resolvePolicy, type AttendancePolicyVersion } from "@/lib/domain/policy";
-import { paymentRule, paymentRuleFields, policyRow } from "@/lib/server/store/supabase-mappers";
+import { paymentRule, paymentRuleFields, policyRow } from "@/lib/server/store/row-mappers";
 import { applyMigrations, asUser, createAuthUser, createDb, type Db } from "./harness";
 
 // Payment rules v2 (legacy rows keep their meaning) and day/night shifts in the database.

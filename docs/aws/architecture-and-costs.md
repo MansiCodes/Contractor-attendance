@@ -1,6 +1,6 @@
 # AWS architecture, compatibility audit and costs
 
-Status (25 Oct 2026): everything below is prepared in code and tested locally. **No AWS resource has been created**, no migration has run against a real database, and WhatsApp live sending is off. Provisioning waits for the owner's approval.
+Status (26 Oct 2026): everything below is prepared in code and tested locally. The owner approved provisioning in the existing company AWS account; **no AWS resource has been created yet** (AWS sign-in on the deployment PC comes first), no migration has run against a real database, and WhatsApp live sending is off.
 
 ## 1. Recommendation in one paragraph
 
@@ -20,7 +20,7 @@ Run the existing Next.js app as **one small container on Amazon ECS Express Mode
 | Background jobs | WhatsApp dispatch is an HTTP endpoint meant to be called by an external cron (documented for Vercel Cron / pg_cron). The queue is the `outbound_messages` table. | EventBridge Scheduler (every 10 min) → Lambda `infra/lambda/dispatch.cjs` → `POST /api/whatsapp/dispatch` with `CRON_SECRET`. The Lambda holds no state; the database queue keeps idempotency keys, retries and the provider status ledger. Schedule created **DISABLED**. |
 | File storage | Supabase Storage for contractor photos only. Uploaded Excel masters are read in memory and never stored. | Private S3 bucket; the browser gets 5-minute signed URLs. Development mode stores photos under `.data/uploads` and serves them only to signed-in users. |
 | Demo vs live | Demo data is in memory. | Three modes: `APP_MODE=demo`, `development` (local PostgreSQL), `production` (RDS + S3). Demo never switches on by itself: a configured database or a production build without `APP_MODE` is an error. |
-| Remaining Supabase / Vercel couplings | `src/lib/server/store/supabase-store.ts`, `src/lib/supabase/server.ts` and the `@supabase/*` packages are no longer used by any running code path. `.env.example` still lists the Supabase variables. | **Awaiting the owner's decision** to delete the dead files and packages. `.env.example` is not edited (workspace rule); the current variables are in `deployment.md` §9. |
+| Remaining Supabase / Vercel couplings | None in code. The old Supabase store, client and `@supabase/*` packages were removed on 26 Oct 2026 (owner's decision); the row conversions they shared with the PostgreSQL store now live in `row-mappers.ts`. `.env.example` still lists the Supabase variables. | `.env.example` is not edited (workspace rule); the current variables are in `deployment.md` §9. |
 
 ## 3. Architecture
 
@@ -100,7 +100,7 @@ Unit prices are from AWS's official price-list files for Asia Pacific (Mumbai), 
 - **Free tier**: not assumed. A new account may have promotional credits; check *Billing → Credits / Free Tier*.
 - **What drives the bill**: the always-on database instance and Fargate task, the load balancer hour charge, and public IPv4 addresses. A NAT gateway (avoided) would add ≈ $33/month. Log volume and photo storage are negligible at this size.
 - **Changes the owner may choose**: Multi-AZ database (no downtime during maintenance) **+ ≈ $18/month**; a second web task during busy periods + ≈ $22/month while it runs; WhatsApp scheduling itself ≈ $0 (Meta charges per message separately).
-- **Budget alert**: `MonthlyBudgetUsd` defaults to **$90** (above the $68 estimate, so it only fires on real overspend), with email alerts at 80% of actual and 100% of forecast.
+- **Budget alert**: `MonthlyBudgetUsd` defaults to **$90** (above the $68 estimate, so it only fires on real overspend), with email alerts at 80% of actual and 100% of forecast. It covers the whole account by default; in an account shared with other workloads, `BudgetScope=project-tag` limits it to resources tagged `project=nf-attendance` (after that cost allocation tag is activated in Billing).
 
 ## 6. Unavoidable risks and open items
 
@@ -108,4 +108,4 @@ Unit prices are from AWS's official price-list files for Asia Pacific (Mumbai), 
 2. **Single-AZ database**: a few minutes of downtime during weekly maintenance (window Monday 03:00–03:30 IST) or an AZ failure; restore is from automated backups.
 3. **WhatsApp delivery cannot be exactly-once.** The queue guarantees no duplicate *logical* notification (idempotency keys), but if the network fails after Meta accepted a message and before we recorded it, the message is marked *failed – check before retrying* rather than resent. A person decides.
 4. **Not yet verified on AWS** (needs real resources): CloudFormation deployment, Express Mode endpoint format, TLS from the task to RDS, S3 signed URLs, CodeBuild image build, Scheduler → Lambda → app, budget emails.
-5. **Owner decisions pending**: delete the dead Supabase code and packages; update `.env.example` (workspace rule forbids editing it without permission); approve provisioning.
+5. **Owner decisions**: provisioning approved on 26 Oct 2026 (the existing company AWS account is used); dead Supabase code removed the same day. Still open: updating `.env.example` (workspace rule forbids editing it without permission).

@@ -38,7 +38,7 @@ export async function applyMigrations(db: Db, opts: { after?: string; until?: st
   }
 }
 
-/** Runs `fn` as an authenticated Supabase user (RLS applies). */
+/** Runs `fn` as a signed-in user (role authenticated, so RLS applies). */
 export async function asUser<T>(db: Db, userId: string, fn: () => Promise<T>): Promise<T> {
   await db.exec(`select set_config('request.jwt.claim.sub', '${userId}', false); set role authenticated;`);
   try {

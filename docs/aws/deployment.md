@@ -25,14 +25,17 @@ Never use root-account access keys, and never paste passwords or AWS secret keys
 
 ## 1. AWS account prerequisites
 
-1. Use a company AWS account dedicated to this app (the budget alert covers the whole account).
+1. The company's existing AWS account is used (owner's decision, 26 Oct 2026). If that account also runs other workloads:
+   - deploy the Data stack with `BudgetScope=project-tag` (§3), so the budget alert counts only this app. First activate the tag `project` under *Billing and Cost Management → Cost allocation tags* (it appears there within 24 hours of the first tagged resource; until it is active, keep `BudgetScope=account`);
+   - if `cdk bootstrap` was already run in this account for ap-south-1, it is reused (running it again only upgrades the shared toolkit stack; check with whoever owns it first);
+   - the VPC uses `10.20.0.0/16`. Change it in `infra/lib/data-stack.ts` only if that range is peered with another network.
 2. Root user: strong password, **MFA on**, no access keys. Use it only for billing and account settings.
 3. Billing: set the company's billing address and GSTIN under *Account → Tax settings* so invoices carry GST correctly. Turn on *Billing preferences → Receive billing alerts*.
 4. On the office PC install: **AWS CLI v2**, **Node.js 24 LTS**, **Git**. Docker is **not** needed (images are built in AWS CodeBuild).
 
 ## 2. Sign-in and least-privilege access
 
-1. Enable **IAM Identity Center** (AWS access portal) and create a user for each person who deploys. MFA required.
+1. Enable **IAM Identity Center** (AWS access portal) and create a user for each person who deploys. MFA required. If the company already signs in to AWS through an access portal (for example, the account belongs to an AWS Organization), Identity Center is already on, possibly in another region: use it, and ask its administrator to create the permission sets below and assign them to you on this account.
 2. Create two permission sets:
    - `NfAdministrator`: AWS managed `AdministratorAccess`. Used **once** for `cdk bootstrap` and for rare account tasks; give it to as few people as possible.
    - `NfDeployer`: a custom permission set with the inline policy [`iam-deployer-policy.json`](iam-deployer-policy.json) (replace `ACCOUNT_ID` with the 12-digit account id). It can only deploy through the CDK roles, upload the build source, start the image build, run the admin task, and read the app's logs.
@@ -48,7 +51,7 @@ Never use root-account access keys, and never paste passwords or AWS secret keys
 ```powershell
 cd infra
 npm ci
-npm test                      # 17 checks on the templates; must pass
+npm test                      # 19 checks on the templates; must pass
 $account = aws sts get-caller-identity --query Account --output text --profile nf-admin
 npx cdk bootstrap "aws://$account/ap-south-1" --profile nf-admin     # once per account
 ```
@@ -59,6 +62,7 @@ Bootstrap creates a small staging bucket, an ECR repository and the `cdk-hnb659f
 npx cdk deploy NfAttendance-Data --profile nf-deploy `
   --parameters NfAttendance-Data:AlertEmail=<it-alerts@yourcompany.in> `
   --parameters NfAttendance-Data:MonthlyBudgetUsd=90 `
+  --parameters NfAttendance-Data:BudgetScope=account `
   --parameters NfAttendance-Data:DatabaseMultiAz=false
 ```
 

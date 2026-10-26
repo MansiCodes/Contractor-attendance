@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { masterImportPayload } from "@/lib/server/store/supabase-mappers";
+import { masterImportPayload } from "@/lib/server/store/row-mappers";
 import { asUser, createAuthUser, createDb, type Db } from "./harness";
 
 // Worker master data in the database: the atomic import RPC, employee ID rules,

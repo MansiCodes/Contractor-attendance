@@ -23,8 +23,8 @@ import type {
 } from "@/lib/domain/types";
 
 // Persistence boundary. Two implementations exist: the in-memory demo store
-// and the Supabase store. Services perform authorization and validation and
-// then call these methods; the Supabase store additionally relies on RLS and
+// and the PostgreSQL store. Services perform authorization and validation and
+// then call these methods; the PostgreSQL store additionally relies on RLS and
 // database functions so permissions are enforced even outside this app.
 
 export interface AttendanceWrite {
@@ -112,7 +112,7 @@ export interface AuditQuery {
 }
 
 export interface DataStore {
-  readonly kind: "demo" | "postgres" | "supabase";
+  readonly kind: "demo" | "postgres";
 
   getProfile(id: string): Promise<Profile | null>;
   listProfiles(): Promise<Profile[]>;
