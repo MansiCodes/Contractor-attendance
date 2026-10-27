@@ -15,8 +15,13 @@ type Env = Record<string, string | undefined>;
 
 const hasDatabase = (env: Env) => !!(env.DATABASE_URL?.trim() || env.DATABASE_HOST?.trim());
 
+// Must be a literal `process.env.APP_MODE` so Next.js can inline it at build
+// (Amplify Hosting compute does not always inject console env vars at runtime).
+const BUILT_APP_MODE = process.env.APP_MODE;
+
 export function getAppMode(env: Env = process.env): AppMode {
-  const explicit = env.APP_MODE?.trim().toLowerCase();
+  const baked = env === process.env ? BUILT_APP_MODE : undefined;
+  const explicit = (env.APP_MODE ?? baked)?.trim().toLowerCase();
   if (explicit === "demo") return "demo";
   if (explicit === "development") return "development";
   if (explicit === "production" || explicit === "live") return "production";

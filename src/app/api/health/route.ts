@@ -16,7 +16,8 @@ export async function GET() {
     }
     return NextResponse.json({ status: "ok" }, { headers: { "Cache-Control": "no-store" } });
   } catch (e) {
-    console.error("[health]", (e as Error).message);
-    return NextResponse.json({ status: "error" }, { status: 503, headers: { "Cache-Control": "no-store" } });
+    const message = (e as Error).message;
+    console.error("[health]", message);
+    return NextResponse.json({ status: "error", reason: message }, { status: 503, headers: { "Cache-Control": "no-store" } });
   }
 }

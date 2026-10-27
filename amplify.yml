@@ -9,6 +9,8 @@ frontend:
         - npm ci --cache .npm --prefer-offline
     build:
       commands:
+        - echo "Amplify build AWS_APP_ID=${AWS_APP_ID:-unset} APP_MODE=${APP_MODE:-unset}"
+        - echo "APP_MODE=${APP_MODE}" >> .env.production
         - npm run build
   artifacts:
     baseDirectory: .next
